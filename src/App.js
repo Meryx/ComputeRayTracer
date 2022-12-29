@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
-import redFragWGSL from "./shaders/red.frag.wgsl.json";
+import redFragWGSL from "./shaders/red.frag.wgsl";
+import triangleVertWGSL from "./shaders/triangle.vert.wgsl";
 import "./App.css";
 
 function App() {
@@ -19,24 +20,13 @@ function App() {
         layout: "auto",
         vertex: {
           module: device.createShaderModule({
-            code: `@vertex
-            fn main(
-              @builtin(vertex_index) VertexIndex : u32
-            ) -> @builtin(position) vec4<f32> {
-              var pos = array<vec2<f32>, 3>(
-                vec2(0.0, 0.5),
-                vec2(-0.5, -0.5),
-                vec2(0.5, -0.5)
-              );
-            
-              return vec4<f32>(pos[VertexIndex], 0.0, 1.0);
-            }`,
+            code: triangleVertWGSL,
           }),
           entryPoint: "main",
         },
         fragment: {
           module: device.createShaderModule({
-            code: redFragWGSL.code,
+            code: redFragWGSL,
           }),
           entryPoint: "main",
           targets: [
@@ -51,11 +41,9 @@ function App() {
       });
 
       function frame() {
-        // Sample is no longer the active page.
-
         const commandEncoder = device.createCommandEncoder();
-        const textureView = context.getCurrentTexture().createView();
-
+        const texture = context.getCurrentTexture();
+        const textureView = texture.createView();
         const renderPassDescriptor = {
           colorAttachments: [
             {
@@ -72,8 +60,8 @@ function App() {
         passEncoder.setPipeline(pipeline);
         passEncoder.draw(3, 1, 0, 0);
         passEncoder.end();
-
-        device.queue.submit([commandEncoder.finish()]);
+        const commands = commandEncoder.finish();
+        device.queue.submit([commands]);
         requestAnimationFrame(frame);
       }
 
