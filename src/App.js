@@ -1,71 +1,52 @@
 import React, { useEffect } from "react";
-import redFragWGSL from "./shaders/red.frag.wgsl";
-import triangleVertWGSL from "./shaders/triangle.vert.wgsl";
+import GPU from "./js/GPU";
+import Camera from "./js/Camera";
+import World from "./js/World";
+import { mat4 } from "gl-matrix";
 import "./App.css";
+
+const ASPECT_RATIO = 3 / 2;
+const WIDTH = 1200;
+const HEIGHT = Math.floor(WIDTH / ASPECT_RATIO);
+const DISTANCE = 1;
 
 function App() {
   useEffect(() => {
     const setup = async () => {
-      const adapter = await navigator.gpu.requestAdapter();
-      const device = await adapter.requestDevice();
-      const canvas = document.getElementById("canvas");
-      const context = canvas.getContext("webgpu");
-      const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-      context.configure({
-        device,
-        format: presentationFormat,
-        alphaMode: "opaque",
-      });
-      const pipeline = device.createRenderPipeline({
-        layout: "auto",
-        vertex: {
-          module: device.createShaderModule({
-            code: triangleVertWGSL,
-          }),
-          entryPoint: "main",
-        },
-        fragment: {
-          module: device.createShaderModule({
-            code: redFragWGSL,
-          }),
-          entryPoint: "main",
-          targets: [
-            {
-              format: presentationFormat,
-            },
-          ],
-        },
-        primitive: {
-          topology: "triangle-list",
-        },
+      const { device, cameraBuffer, viewMatBuffer, worldBuffer } =
+        await GPU.init(WIDTH, HEIGHT);
+      const { cameraBufferArray, viewMatBufferArray, rotate, dolly } =
+        Camera.init(DISTANCE, ASPECT_RATIO);
+
+      const { arrayBuffer } = World.init();
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "d") {
+          rotate(2, 1);
+          device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
+        }
+        if (event.key === "w") {
+          rotate(1, 1);
+          device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
+        }
+        if (event.key === "a") {
+          rotate(2, -1);
+          device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
+        }
+        if (event.key === "s") {
+          rotate(1, -1);
+          device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
+        }
       });
 
-      function frame() {
-        const commandEncoder = device.createCommandEncoder();
-        const texture = context.getCurrentTexture();
-        const textureView = texture.createView();
-        const renderPassDescriptor = {
-          colorAttachments: [
-            {
-              view: textureView,
-              clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-              loadOp: "clear",
-              storeOp: "store",
-            },
-          ],
-        };
+      document.addEventListener("mousewheel", (event) => {
+        dolly(event.deltaY);
+        device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
+      });
 
-        const passEncoder =
-          commandEncoder.beginRenderPass(renderPassDescriptor);
-        passEncoder.setPipeline(pipeline);
-        passEncoder.draw(3, 1, 0, 0);
-        passEncoder.end();
-        const commands = commandEncoder.finish();
-        device.queue.submit([commands]);
-        requestAnimationFrame(frame);
-      }
-
-      requestAnimationFrame(frame);
+      device.queue.writeBuffer(cameraBuffer, 0, cameraBufferArray);
+      device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
+      device.queue.writeBuffer(worldBuffer, 0, arrayBuffer);
     };
 
     setup();
@@ -74,7 +55,7 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <canvas id="canvas" width="200" height="200"></canvas>
+        <canvas id="canvas" width={WIDTH} height={HEIGHT}></canvas>
       </header>
     </div>
   );
