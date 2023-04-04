@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import GPU from "./js/GPU";
 import Camera from "./js/Camera";
 import World from "./js/World";
@@ -11,14 +11,15 @@ const HEIGHT = Math.floor(WIDTH / ASPECT_RATIO);
 const DISTANCE = 1;
 
 function App() {
+  const hasMounted = useRef(false);
   useEffect(() => {
     const setup = async () => {
-      const { device, cameraBuffer, viewMatBuffer, worldBuffer } =
+      const { device, cameraBuffer, viewMatBuffer, worldBuffer, createdBuffer, frame, tileBuffer } =
         await GPU.init(WIDTH, HEIGHT);
       const { cameraBufferArray, viewMatBufferArray, rotate, dolly } =
         Camera.init(DISTANCE, ASPECT_RATIO);
 
-      const { arrayBuffer } = World.init();
+      const { arrayBuffer, createdBufferArray } = World.init();
 
       document.addEventListener("keydown", (event) => {
         if (event.key === "d") {
@@ -47,10 +48,16 @@ function App() {
       device.queue.writeBuffer(cameraBuffer, 0, cameraBufferArray);
       device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
       device.queue.writeBuffer(worldBuffer, 0, arrayBuffer);
+      device.queue.writeBuffer(createdBuffer, 0, createdBufferArray);
+      requestAnimationFrame(frame);
     };
+    if(!hasMounted.current){
+      setup();
+      hasMounted.current =true;
+    }
 
-    setup();
-  });
+
+  }, []);
 
   return (
     <div className="App">

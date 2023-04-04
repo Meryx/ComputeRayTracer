@@ -1,12 +1,15 @@
 @group(0) @binding(0) var color_buffer: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(1) var<storage, read_write> camera: array<f32, 11>;
 @group(0) @binding(2) var<uniform> view : mat4x4<f32>;
-@group(0) @binding(3) var<storage> hello : Shape;
+@group(0) @binding(3) var<uniform> objects : array<Shape, 268>;
+@group(0) @binding(4) var<storage, read_write> created : u32;
+@group(0) @binding(5) var<storage, read_write> tile : vec3<i32>;
+@group(0) @binding(6) var<storage, read_write> alt_color_buffer : array<vec3<f32>, 960000>;
 
 /* Numerical constants */
 const PI: f32 = 3.14159265359;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
-const NUM_OF_OBJECTS : u32 = 1;
+const NUM_OF_OBJECTS : u32 = 3;
 
 struct Ray {
     origin: vec3<f32>,
@@ -55,17 +58,19 @@ var<private> metalSphere2 : Shape;
 var<private> glassSphere : Shape;
 var<private> worldCamera : Camera;
 var<private> groundSphere : Shape;
-var<private> objects : array<Shape, NUM_OF_OBJECTS>;
-var<private> created : u32 = 1;
+//var<private> objects : array<Shape, NUM_OF_OBJECTS>;
+var<private> many : u32 = 10;
 
 fn setupWorld() {
 
     groundSphere.shape = 1;
-    groundSphere.point = vec3<f32>(0, -1001, 0);
+    groundSphere.point = vec3<f32>(0, -1001, 0);;
     groundSphere.dimension = 1000;
-    groundSphere.albedo = vec3<f32>(0.5, 0.5, 0.5);
+    groundSphere.albedo = vec3<f32>(0.8, 0.8, 0.8);
     groundSphere.material = 1;
-    objects[0] = hello;
+    //objects[0] = groundSphere;
+    // objects[1] = hello[0];
+    // objects[2] = hello[1];
 
 
 
@@ -76,13 +81,13 @@ fn setupCamera()
 {
     let focalDistance: f32 = camera[9];
     let aspectRatio: f32 = camera[10];
-    let theta = degreesToRadians(90);
+    let theta = degreesToRadians(20);
     let h = tan(theta/2);
     let viewportHeight = 2.0 * h;
     let viewportWidth = aspectRatio * viewportHeight;
 
-    let lookFrom = vec3<f32>(0,0,0);
-    let lookAt = vec3<f32>(0,0,-1);
+    let lookFrom = vec3<f32>(13,2,3);
+    let lookAt = vec3<f32>(0,0,0);
     let aperture = 0.1;
     let focusDist : f32 = 10;
     let vup = vec3<f32>(0,1,0);
@@ -120,13 +125,15 @@ fn compare(v1 : vec3<f32>, v2 : vec3<f32>) -> bool
 
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
+    seed = u32(tile.z);
+    
     setupWorld();
 
     /* Data passed from the CPU */
 
 
     let screenSize: vec2<u32> = textureDimensions(color_buffer);
-    let screenPos : vec2<i32> = vec2<i32>(i32(GlobalInvocationID.x), i32(GlobalInvocationID.y));
+    let screenPos : vec2<i32> = vec2<i32>(tile.x + i32(GlobalInvocationID.x), tile.y + i32(GlobalInvocationID.y));
     // let horizontal_coefficient: f32 = (f32(screen_pos.x) + 0.5) / f32(screen_size.x);
     // let vertical_coefficient: f32 = (f32(screen_size.y) - f32(screen_pos.y) + 0.5) / f32(screen_size.y);
 
@@ -140,7 +147,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     var ray : Ray;
 
 
-    let samplesPerPixel : u32 = 50;
+    let samplesPerPixel : u32 = 1;
     var pixel_color : vec3<f32> = vec3<f32>(0, 0, 0);
     for (var i : u32 = 0; i < samplesPerPixel; i++)
     {
@@ -154,12 +161,16 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         pixel_color += rayColor(ray);
     }
     pixel_color = pixel_color / f32(samplesPerPixel);
-    pixel_color = sqrt(pixel_color);
+    //pixel_color = sqrt(pixel_color);
+
+    pixel_color =  pixel_color / f32(samplesPerPixel);
+    alt_color_buffer[screenPos.x + 1200 * screenPos.y] = alt_color_buffer[screenPos.x + 1200 * screenPos.y] + pixel_color;
+    pixel_color = alt_color_buffer[screenPos.x + 1200 * screenPos.y] / f32(tile.z);
+    textureStore(color_buffer, screenPos, vec4<f32>(pixel_color, 1.0));
 
     
-
-    textureStore(color_buffer, screenPos, vec4<f32>(pixel_color, 1.0));
 }
+
 
 /* Ray-shape intersection tests */
 fn rayIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord 
@@ -199,6 +210,27 @@ fn rayIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord
         hitRecord.fuzziness = shape.fuzziness;
         hitRecord.etat = shape.etat;
     }
+    if(shape.shape == 2)
+    {
+        let normal = vec3<f32>(0.0, 1.0, 0.0);
+        let denom = (dot(normal, ray.direction));
+        let num = dot((shape.point - ray.origin), normal);
+        let t = num/denom;
+        if(t < tMin || t > tMax)
+        {
+                hitRecord.hit = false;
+                return hitRecord;
+        }
+        hitRecord.hit = t >= 0;
+        hitRecord.normal = normal;
+        hitRecord.frontFace = compare(normal, hitRecord.normal);
+        hitRecord.point = rayAt(ray, t);
+        hitRecord.t = t;
+        hitRecord.albedo = shape.albedo;
+        hitRecord.material = shape.material;
+        hitRecord.fuzziness = shape.fuzziness;
+        hitRecord.etat = shape.etat;
+    }
     return hitRecord;
     
 }
@@ -224,7 +256,7 @@ fn rayColor(ray : Ray) -> vec3<f32>
         var hitRecord : HitRecord;
         var temp : HitRecord;
         for (var i: u32 = 0; i < created; i++) {
-            temp = rayIntersection(localRay, objects[i], 0.0000001, nearest);
+            temp = rayIntersection(localRay, objects[i], 0.001, nearest);
             if(temp.hit)
             {
                 hitAnything = true;
@@ -278,7 +310,10 @@ fn rayColor(ray : Ray) -> vec3<f32>
 
 
     let t2 = 0.5 * (grad + 1.0);
-    color += attuenation * ((1.0 - t2) * vec3<f32>(1.0, 1.0, 1.0) + t2 * vec3<f32>(0.5, 0.7, 1.0));
+
+        color += attuenation * ((1.0 - t2) * vec3<f32>(1.0, 1.0, 1.0) + t2 * vec3<f32>(0.5, 0.7, 1.0));
+
+    
     return color;
 }
 

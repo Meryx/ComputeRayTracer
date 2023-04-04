@@ -1,6 +1,12 @@
 import computeShader from "../shaders/compute.wgsl";
 import renderShader from "../shaders/screen_shader.wgsl";
 
+const TILE_WIDTH = 32;
+const TILE_HEIGHT = 32;
+
+let currentTileX = 0;
+let currentTileY = 0;
+
 const init = async (WIDTH, HEIGHT) => {
   //Retrieve GPU interface
   const adapter = await navigator.gpu.requestAdapter();
@@ -48,6 +54,20 @@ const init = async (WIDTH, HEIGHT) => {
     usage: window.GPUBufferUsage.STORAGE | window.GPUBufferUsage.COPY_DST,
   });
 
+  const createdSize = 1 * Uint32Array.BYTES_PER_ELEMENT;
+
+  const createdBuffer = device.createBuffer({
+    size: createdSize,
+    usage: window.GPUBufferUsage.STORAGE | window.GPUBufferUsage.COPY_DST,
+  });
+
+  const tileSize = 3 * Uint32Array.BYTES_PER_ELEMENT;
+
+  const tileBuffer = device.createBuffer({
+    size: tileSize,
+    usage: window.GPUBufferUsage.STORAGE | window.GPUBufferUsage.COPY_DST,
+  });
+
   const viewMatSize = 16 * Float32Array.BYTES_PER_ELEMENT;
 
   const viewMatBuffer = device.createBuffer({
@@ -56,7 +76,12 @@ const init = async (WIDTH, HEIGHT) => {
   });
 
   const worldBuffer = device.createBuffer({
-    size: 11 * Float32Array.BYTES_PER_ELEMENT,
+    size: 484 * 16 * Float32Array.BYTES_PER_ELEMENT,
+    usage: window.GPUBufferUsage.UNIFORM | window.GPUBufferUsage.COPY_DST,
+  });
+
+  const alt_color_buffer = device.createBuffer({
+    size: 960000 * 4 * Float32Array.BYTES_PER_ELEMENT,
     usage: window.GPUBufferUsage.STORAGE | window.GPUBufferUsage.COPY_DST,
   });
 
@@ -87,6 +112,32 @@ const init = async (WIDTH, HEIGHT) => {
       },
       {
         binding: 3,
+        visibility: window.GPUShaderStage.COMPUTE,
+        buffer: {
+          hasDynamicOffset: false,
+          minBindingSize: 0,
+        },
+      },
+      {
+        binding: 4,
+        visibility: window.GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "storage",
+          hasDynamicOffset: false,
+          minBindingSize: 0,
+        },
+      },
+      {
+        binding: 5,
+        visibility: window.GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "storage",
+          hasDynamicOffset: false,
+          minBindingSize: 0,
+        },
+      },
+      {
+        binding: 6,
         visibility: window.GPUShaderStage.COMPUTE,
         buffer: {
           type: "storage",
@@ -122,6 +173,25 @@ const init = async (WIDTH, HEIGHT) => {
           buffer: worldBuffer,
         },
       },
+      {
+        binding: 4,
+        resource: {
+          buffer: createdBuffer,
+        },
+      },
+      {
+        binding: 5,
+        resource: {
+          buffer: tileBuffer,
+        },
+      },
+      {
+        binding: 6,
+        resource: {
+          buffer: alt_color_buffer,
+        },
+      },
+
     ],
   });
 
@@ -197,13 +267,54 @@ const init = async (WIDTH, HEIGHT) => {
     },
   });
 
-  const frame = () => {
-    const commandEncoder = device.createCommandEncoder();
-    const rayTracePass = commandEncoder.beginComputePass();
-    rayTracePass.setPipeline(rayTracingPipeline);
-    rayTracePass.setBindGroup(0, rayTracingBindGroup);
-    rayTracePass.dispatchWorkgroups(WIDTH, HEIGHT, 1);
-    rayTracePass.end();
+  let rendered = false;
+  let started = false;
+
+  const tileBufferArray = new ArrayBuffer(12);
+  let elem = new Int32Array(tileBufferArray, 0, 3);
+  elem[0] = 0;
+  elem[1] = 0;
+  elem[2] = 1;
+  let tilesr = 0;
+
+  const  frame =  async () => {
+    device.queue.writeBuffer(tileBuffer, 0, tileBufferArray);
+    
+    const compute = async () => {
+      if(!rendered)
+      {
+        const commandEncoder = device.createCommandEncoder();
+        const rayTracePass = commandEncoder.beginComputePass();
+        rayTracePass.setPipeline(rayTracingPipeline);
+        rayTracePass.setBindGroup(0, rayTracingBindGroup);
+        rayTracePass.dispatchWorkgroups(Math.ceil(WIDTH / 16)  , Math.ceil(HEIGHT / 16) , 1);
+        rayTracePass.end();
+        tilesr = tilesr + 1;
+        elem[0] = elem[0] + 75;
+        //console.log(elem[1])
+        //console.log("Sned tile number: ", tilesr)
+        if(elem[0] == 1200)
+        {
+          elem[0] = 0;
+          elem[1] = elem[1] + 50;
+          if(elem[1] == 800){
+            elem[1] = 0;
+            elem[2] = elem[2] + 1;
+            console.log(elem)
+            //rendered = true;
+          }
+        }
+        const commands = commandEncoder.finish();
+        device.queue.submit([commands]);
+
+      }
+    }
+
+    if(!started)
+    {
+      compute();
+      started = false;
+    }
 
     const texture = context.getCurrentTexture();
     const textureView = texture.createView();
@@ -218,6 +329,7 @@ const init = async (WIDTH, HEIGHT) => {
       ],
     };
 
+    const commandEncoder = device.createCommandEncoder();
     const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
     passEncoder.setPipeline(screenPipeline);
     passEncoder.setBindGroup(0, screenBindGroup);
@@ -225,12 +337,15 @@ const init = async (WIDTH, HEIGHT) => {
     passEncoder.end();
     const commands = commandEncoder.finish();
     device.queue.submit([commands]);
+    await device.queue.onSubmittedWorkDone();
+    console.log('hi')
+    //compute();
     requestAnimationFrame(frame);
   };
 
-  requestAnimationFrame(frame);
 
-  return { device, cameraBuffer, viewMatBuffer, worldBuffer };
+
+  return { device, cameraBuffer, viewMatBuffer, worldBuffer, createdBuffer,  frame, tileBuffer};
 };
 
 const functions = { init };
