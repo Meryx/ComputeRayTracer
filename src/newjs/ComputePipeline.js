@@ -12,7 +12,12 @@ const createBindGroupEntries = (entries) => {
   return entries.map((e, i) => {
     return {
       binding: i,
-      resource: e.resource,
+      resource:
+        e.resourceType === 'buffer'
+          ? {
+              [e.resourceType]: e.resource,
+            }
+          : e.resource,
     };
   });
 };

@@ -71,10 +71,6 @@ fn setupWorld() {
     //objects[0] = groundSphere;
     // objects[1] = hello[0];
     // objects[2] = hello[1];
-
-
-
-
 }
 
 fn setupCamera() 
