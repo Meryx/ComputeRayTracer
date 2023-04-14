@@ -8,21 +8,25 @@
 /* Numerical constants */
 const PI: f32 = 3.14159265359;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
-const NUM_OF_OBJECTS : u32 = 2;
+const NUM_OF_OBJECTS : u32 = 3;
+const MAX_STACK_SIZE : u32 = 256;
 
 struct Ray {
     origin: vec3<f32>,
     direction: vec3<f32>,
+    time: f32,
 }
 
 
 const SPHERE : u32 = 1;
 const PLANE : u32 = 2;
 const TRIANGLE : u32 = 3;
+const BOUNDINGBOX : u32 = 4;
 
 struct Shape {
     shape: u32,
     point: vec3<f32>,
+    point1: vec3<f32>,
     albedo: vec3<f32>,
     dimension: f32,
     material: u32,
@@ -32,6 +36,20 @@ struct Shape {
     v1: vec3<f32>,
     v2: vec3<f32>,
     v3: vec3<f32>,
+    time0: f32,
+    time1: f32,
+    min: vec3<f32>,
+    max: vec3<f32>,
+    created: bool,
+}
+
+struct BVHNode {
+    box: Shape,
+    right: i32,
+    left: i32,
+    index: i32,
+    isLeaf: bool,
+    shape: Shape,
 }
 
 struct HitRecord { 
@@ -55,6 +73,8 @@ struct Camera {
     w: vec3<f32>,
     u: vec3<f32>,
     v: vec3<f32>,
+    time0: f32,
+    time1: f32,
 }
 
 
@@ -89,31 +109,49 @@ fn setupCamera()
     worldCamera.w = w;
     worldCamera.u = u;
     worldCamera.v = v;
+    worldCamera.time0 = 0;
+    worldCamera.time1 = 1;
 }
 
 var<private> objects : array<Shape, NUM_OF_OBJECTS>;
+var<private> nodes : array<BVHNode, 2 * NUM_OF_OBJECTS>;
 var<private> worldCamera : Camera;
 var<private> redSphere : Shape;
 var<private> grayPlane : Shape;
+var<private> blueBoundingBox : Shape;
 
 fn setupWorld() {
     redSphere.shape = SPHERE;
-    redSphere.point = vec3<f32>(0, 0, -1.5);;
+    redSphere.point = vec3<f32>(0, 0, -1.5);
+    redSphere.point1 = vec3<f32>(0.0, 0, -1.5);
+    redSphere.time0 = 0;
+    redSphere.time1 = 1;
     redSphere.dimension = 0.7;
     
     redSphere.material = 1;
 
-    redSphere.albedo = vec3<f32>(0.8, 0.0, 0.0);
     redSphere.albedo = vec3<f32>(0.0, 0.8, 0.0);
     objects[0] = redSphere;
 
-    grayPlane.shape = PLANE;
-    grayPlane.point = vec3<f32>(0.0f, -0.75f, 0.0f);
+    grayPlane.shape = SPHERE;
+    grayPlane.point = vec3<f32>(0.0, -1001, -1.5f);
+    grayPlane.point1 = vec3<f32>(0.0, -1001, -1.5f);
     grayPlane.albedo = vec3<f32>(0.7, 0.7, 0.7);
     grayPlane.material = 2;
-    grayPlane.normal = vec3<f32>(0.0f, 1.0f, 0.0f);
+    grayPlane.time0 = 0;
+    grayPlane.time1 = 1;
+    grayPlane.dimension = 1000.0f;
+    //grayPlane.normal = vec3<f32>(0.0f, 1.0f, 0.0f);
     grayPlane.fuzziness = 0.1;
     objects[1] = grayPlane;
+
+    blueBoundingBox.min = vec3<f32>(-2.5, -1.1, -2.0);
+    blueBoundingBox.max = vec3<f32>(1.5, -0.8, -1.0);
+    blueBoundingBox.albedo = vec3<f32>(0.0, 0.0, 1.0);
+    blueBoundingBox.shape = BOUNDINGBOX;
+    blueBoundingBox.material = 4;
+    //objects[2] = blueBoundingBox;
+    //objects[0] = blueBoundingBox;
 
 }
 
@@ -156,6 +194,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         let offset = worldCamera.u * rd.x + worldCamera.v * rd.y;
         ray.origin = worldCamera.origin + offset;
         ray.direction = worldCamera.lowerLeftCorner + u * worldCamera.horizontal + v * worldCamera.vertical - worldCamera.origin - offset;
+        ray.time = randRange(0.0f, 1.0f);
         pixel_color += rayColor(ray);
     }
     pixel_color = pixel_color / f32(samplesPerPixel);
@@ -164,10 +203,74 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     
 }
 
+fn getShapePoint(shape : Shape, time : f32) -> vec3<f32>
+{
+    let dir = shape.point1 - shape.point;
+    return shape.point + ((time - shape.time0) / (shape.time1 - shape.time0)) * dir;
+    //return vec3<f32>(1.0, 0.0, -1.5);
+}
+
+fn mergeBoundingBoxes(box1 : Shape, box2 : Shape) -> Shape
+{
+    let minx = min(box1.min.x, box2.min.x);
+    let miny = min(box1.min.y, box2.min.y);
+    let minz = min(box1.min.z, box2.min.z);
+
+    let maxx = max(box1.max.x, box2.max.x);
+    let maxy = min(box1.max.y, box2.max.y);
+    let maxz = min(box1.max.z, box2.max.z);
+
+    var box : Shape;
+
+    box.min = vec3<f32>(minx, miny, minz);
+    box.max = vec3<f32>(maxx, maxy, maxz);
+    box.shape = BOUNDINGBOX;
+    box.material = 4;
+
+    return box;
+
+    
+}
+
+fn computeSphereBoundingBox(shape : Shape) -> Shape
+{
+    var boundingBox1 : Shape;
+    var boundingBox2 : Shape;
+
+    boundingBox1.min = shape.point - vec3<f32>(shape.dimension, shape.dimension, shape.dimension);
+    boundingBox1.max = shape.point + vec3<f32>(shape.dimension, shape.dimension, shape.dimension);
+    boundingBox1.shape = BOUNDINGBOX;
+    boundingBox1.material = 4;
+
+    boundingBox2.min = shape.point1 - vec3<f32>(shape.dimension, shape.dimension, shape.dimension);
+    boundingBox2.max = shape.point1 + vec3<f32>(shape.dimension, shape.dimension, shape.dimension);
+    boundingBox2.shape = BOUNDINGBOX;
+    boundingBox2.material = 4;
+    return mergeBoundingBoxes(boundingBox1, boundingBox2);
+}
+
+fn computeBoundingBox(shape : Shape) -> Shape
+{
+    var boundingBox : Shape;
+    let shapeType = shape.shape;
+
+    switch shapeType {
+        case SPHERE: {
+            boundingBox = computeSphereBoundingBox(shape);
+            boundingBox.created = true;
+        }
+        default: {
+            boundingBox.created = false;
+        }
+    }
+    return boundingBox;
+}
+
 fn raySphereIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord
 {
     var hitRecord : HitRecord;
-    let oc = ray.origin - shape.point; //Vector from sphere center to ray origin
+    let point = getShapePoint(shape, ray.time);
+    let oc = ray.origin - point; //Vector from sphere center to ray origin
     let a = lengthSquared(ray.direction);
     let half_b = dot(oc, ray.direction);
     let c = lengthSquared(oc) - shape.dimension * shape.dimension;
@@ -194,12 +297,12 @@ fn raySphereIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> Hit
     }
 
     let surfacePoint = rayAt(ray, root);
-    let normal = normalize(hitRecord.point - shape.point);
+    let normal = normalize(hitRecord.point - point);
 
     //Assign hit record properties
     hitRecord.hit = true;
     hitRecord.t = root;
-    hitRecord.point = rayAt(ray, root);
+    hitRecord.point = surfacePoint;
     hitRecord.normal = faceForward(normal, normal, ray.direction);
     hitRecord.frontFace = isEqual(normal, hitRecord.normal);
     hitRecord.albedo = shape.albedo;
@@ -280,6 +383,156 @@ fn rayTriangleIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> H
     return hitRecord;
 }
 
+fn rayBVHIntersection(ray : Ray, node : BVHNode, tMin : f32, tMax: f32) -> HitRecord
+{
+    var hitRecord : HitRecord;
+    var stack : array<i32, MAX_STACK_SIZE>;
+    var top : i32 = -1;
+    top = top + 1;
+    stack[top] = node.index;
+    while(top >= 0)
+    {
+        let currentNodeIndex = stack[top];
+        top = top - 1;
+
+        let currentNode = nodes[currentNodeIndex];
+        let currentBox = currentNode.box;
+        hitRecord = rayBoundingBoxIntersection(ray, currentBox, tMin, tMax);
+        if(hitRecord.hit)
+        {
+            if(currentNode.right == -1 && currentNode.left == -1)
+            {
+                return rayIntersection(ray , currentNode.shape, tMin , tMax);
+            }
+            if(currentNode.right != -1)
+            {
+                top = top + 1;
+                stack[top] = currentNode.right;
+            }
+            if(currentNode.left != -1)
+            {
+                top = top + 1;
+                stack[top] = currentNode.left;
+            }
+        }
+    }
+    hitRecord.hit = false;
+    return hitRecord;
+}
+
+fn rayBoundingBoxIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord
+{
+    var hitRecord : HitRecord;
+    var t_min = tMin;
+    var t_max = tMax;
+    var t : f32 = 0;
+    //var zcorrection : f32 = 1;
+    var flipped : bool = false;
+    var instanceFlipped : bool = false;
+    for (var x: u32 = 0; x < 3; x++)
+    {
+        if(x == 2)
+        {
+            //zcorrection = -1;
+        }
+        let invD = 1.0 / ray.direction[x];
+        var t0 = (shape.min[x] - ray.origin[x]) * invD;
+        var t1 = (shape.max[x] - ray.origin[x]) * invD;
+        if(invD < 0.0f)
+        {
+            let temp = t0;
+            t0 = t1;
+            t1 = temp;
+            instanceFlipped = true;
+        }else {
+            instanceFlipped = false;
+        }
+        if(t0 > t_min)
+        {
+            t_min = t0;
+            flipped = instanceFlipped;
+        }
+        if(t1 < t_max)
+        {
+            t_max = t1;
+        }
+        if(t_min >= t_max)
+        {
+            hitRecord.hit = false;
+            return hitRecord;
+        }
+    }
+    
+    hitRecord.hit = true;
+    hitRecord.t = t_min;
+    hitRecord.point = rayAt(ray, t_min);
+    hitRecord.material = shape.material;
+
+
+    var xdiff : f32;
+    var ydiff : f32;
+    var zdiff : f32;
+
+    if(flipped)
+    {
+        xdiff = abs(hitRecord.point.x - shape.max.x) / abs(shape.max.x - shape.min.x);
+        ydiff = abs(hitRecord.point.y - shape.max.y) / abs(shape.max.y - shape.min.y);
+        zdiff = abs(hitRecord.point.z - shape.max.z) / abs(shape.max.z - shape.min.z);
+    }else
+    {
+        /*
+            blueBoundingBox.min = vec3<f32>(-2.5, 0.5, -1.0);
+            blueBoundingBox.max = vec3<f32>(1.5, 1.5, -2.0);
+        */
+        xdiff = abs(hitRecord.point.x - shape.min.x) / abs(shape.max.x - shape.min.x);
+        ydiff = abs(hitRecord.point.y - shape.min.y) / abs(shape.max.y - shape.min.y);
+        zdiff = abs(hitRecord.point.z - shape.min.z) / abs(shape.max.z - shape.min.z);
+    }
+
+    
+
+    var normal : vec3<f32>;
+    hitRecord.albedo = shape.albedo;
+
+    if(xdiff < ydiff && xdiff < zdiff)
+    {
+        if(flipped)
+        {
+            normal = vec3<f32>(1.0, 0.0, 0.0);
+        }
+        else{
+            normal = vec3<f32>(-1.0, 0.0, 0.0);
+        }
+    }
+
+    if(ydiff < zdiff && ydiff < xdiff)
+    {
+        if(flipped)
+        {
+            normal = vec3<f32>(0.0, 1.0, 0.0);
+        }
+        else{
+            normal = vec3<f32>(0.0, -1.0, 0.0);
+        }
+    }
+
+    if(zdiff < ydiff && zdiff < xdiff)
+    {
+        if(flipped)
+        {
+            normal = vec3<f32>(0.0, 0.0, -1.0);
+        }
+        else{
+            normal = vec3<f32>(0.0, 0.0, 1.0);
+        }
+    }
+
+    normal = vec3<f32>(0.0, 0.0, 1.0);
+    hitRecord.normal = normal;
+    
+    return hitRecord;
+}
+
 /* Ray-shape intersection tests */
 fn rayIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord 
 {
@@ -295,6 +548,9 @@ fn rayIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord
         }
         case TRIANGLE: {
             hitRecord = rayTriangleIntersection(ray, shape, tMin, tMax);
+        }
+        case BOUNDINGBOX: {
+            hitRecord = rayBoundingBoxIntersection(ray, shape, tMin, tMax);
         }   
         default {
             hitRecord.hit = false;
@@ -317,7 +573,10 @@ fn rayColor(ray : Ray) -> vec3<f32>
     var localRay : Ray;
     localRay.origin = ray.origin;
     localRay.direction = ray.direction;
+    localRay.time = ray.time;
     var attuenation : vec3<f32> = vec3<f32>(1.0);
+    var mask : i32 = -1;
+    var carryMask : i32 = -1;
     for (var x : u32 = 0; x < depth; x++)
     {
         var hitAnything : bool = false;
@@ -348,15 +607,21 @@ fn rayColor(ray : Ray) -> vec3<f32>
         {
             for (var i: u32 = 0; i < NUM_OF_OBJECTS; i++) 
             {
+                if(i32(i) == mask)
+                {
+                    continue;
+                }
 
                 temp = rayIntersection(localRay, objects[i], 0.001, nearest);
                 if(temp.hit)
                 {
+                    carryMask = i32(i);
                     hitAnything = true;
                     nearest = temp.t;
                     hitRecord = temp;
                     break;
                 }
+                
             }
         }
         
@@ -366,6 +631,7 @@ fn rayColor(ray : Ray) -> vec3<f32>
             localRay.origin = hitRecord.point;
             if(hitRecord.material == 1)
             {
+                mask = -1;
                 localRay.direction = hitRecord.normal + randomUnitVector();
                 if(nearZero(localRay.direction))
                 {
@@ -374,6 +640,7 @@ fn rayColor(ray : Ray) -> vec3<f32>
             }
             if(hitRecord.material == 2)
             {
+                mask = -1;
                 localRay.direction = reflect(normalize(localRay.direction), hitRecord.normal) + hitRecord.fuzziness * randomInUnitSphere();
                 if(dot(localRay.direction, hitRecord.normal) < 0)
                 {
@@ -382,6 +649,7 @@ fn rayColor(ray : Ray) -> vec3<f32>
             }
             if(hitRecord.material == 3)
             {
+                mask = -1;
                 let etaiOverEtat = select(hitRecord.etat, 1.0/hitRecord.etat, hitRecord.frontFace);
                 let unitDirection = normalize(localRay.direction);
                 let cosTheta = min(dot(-unitDirection, hitRecord.normal), 1.0);
@@ -394,8 +662,13 @@ fn rayColor(ray : Ray) -> vec3<f32>
             }
             if(hitRecord.material == 4)
             {
-                attuenation = vec3<f32>(0.0, 1.0, 0.0);
-                break;
+                mask = carryMask;
+                localRay.direction = hitRecord.normal + randomUnitVector();
+                if(nearZero(localRay.direction))
+                {
+                    localRay.direction = hitRecord.normal;
+                }
+                
             }
 
             attuenation *= hitRecord.albedo;

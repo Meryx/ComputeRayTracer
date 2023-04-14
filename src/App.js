@@ -1,9 +1,9 @@
-import React, { useEffect, useRef } from "react";
-import GPU from "./js/GPU";
-import Camera from "./js/Camera";
-import World from "./js/World";
-import { mat4 } from "gl-matrix";
-import "./App.css";
+import React, { useEffect, useRef } from 'react';
+import GPU from './js/GPU';
+import Camera from './js/Camera';
+import World from './js/World';
+import { mat4 } from 'gl-matrix';
+import './App.css';
 
 const ASPECT_RATIO = 3 / 2;
 const WIDTH = 1200;
@@ -14,33 +14,41 @@ function App() {
   const hasMounted = useRef(false);
   useEffect(() => {
     const setup = async () => {
-      const { device, cameraBuffer, viewMatBuffer, worldBuffer, createdBuffer, frame, tileBuffer } =
-        await GPU.init(WIDTH, HEIGHT);
+      const {
+        device,
+        cameraBuffer,
+        viewMatBuffer,
+        worldBuffer,
+        createdBuffer,
+        frame,
+        treeBuffer,
+        tileBuffer,
+      } = await GPU.init(WIDTH, HEIGHT);
       const { cameraBufferArray, viewMatBufferArray, rotate, dolly } =
         Camera.init(DISTANCE, ASPECT_RATIO);
 
-      const { arrayBuffer, createdBufferArray } = World.init();
+      const { arrayBuffer, createdBufferArray, bvharraybuffer } = World.init();
 
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "d") {
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'd') {
           rotate(2, 1);
           device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
         }
-        if (event.key === "w") {
+        if (event.key === 'w') {
           rotate(1, 1);
           device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
         }
-        if (event.key === "a") {
+        if (event.key === 'a') {
           rotate(2, -1);
           device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
         }
-        if (event.key === "s") {
+        if (event.key === 's') {
           rotate(1, -1);
           device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
         }
       });
 
-      document.addEventListener("mousewheel", (event) => {
+      document.addEventListener('mousewheel', (event) => {
         dolly(event.deltaY);
         device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
       });
@@ -49,14 +57,13 @@ function App() {
       device.queue.writeBuffer(viewMatBuffer, 0, viewMatBufferArray);
       device.queue.writeBuffer(worldBuffer, 0, arrayBuffer);
       device.queue.writeBuffer(createdBuffer, 0, createdBufferArray);
+      device.queue.writeBuffer(treeBuffer, 0, bvharraybuffer);
       requestAnimationFrame(frame);
     };
-    if(!hasMounted.current){
+    if (!hasMounted.current) {
       setup();
-      hasMounted.current =true;
+      hasMounted.current = true;
     }
-
-
   }, []);
 
   return (

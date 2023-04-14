@@ -1,25 +1,37 @@
 @group(0) @binding(0) var color_buffer: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(1) var<storage, read_write> camera: array<f32, 11>;
 @group(0) @binding(2) var<uniform> view : mat4x4<f32>;
-@group(0) @binding(3) var<uniform> objects : array<Shape, 268>;
+@group(0) @binding(3) var<uniform> objects : array<Shape, 499>;
 @group(0) @binding(4) var<storage, read_write> created : u32;
 @group(0) @binding(5) var<storage, read_write> tile : vec3<i32>;
 @group(0) @binding(6) var<storage, read_write> alt_color_buffer : array<vec3<f32>, 960000>;
+@group(0) @binding(7) var<storage> nodes : array<BVHNode, 550>;
 
 /* Numerical constants */
 const PI: f32 = 3.14159265359;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
 const NUM_OF_OBJECTS : u32 = 3;
+const MAX_STACK_SIZE : u32 = 256;
 
 struct Ray {
     origin: vec3<f32>,
     direction: vec3<f32>,
 }
 
+struct BVHNode {
+    min: vec3<f32>, //offset 0
+    max: vec3<f32>, //offset 16
+    right: i32, //offset 32
+    left: i32, //offset 36
+    isLeaf: i32, //offset 40
+}
+
 struct Shape {
     shape: u32,
     point: vec3<f32>,
     albedo: vec3<f32>,
+    min: vec3<f32>,
+    max: vec3<f32>,
     dimension: f32,
     material: u32,
     fuzziness: f32,
@@ -58,19 +70,118 @@ var<private> metalSphere2 : Shape;
 var<private> glassSphere : Shape;
 var<private> worldCamera : Camera;
 var<private> groundSphere : Shape;
-//var<private> objects : array<Shape, NUM_OF_OBJECTS>;
+//var<private> objects : array<Shape, 4>;
 var<private> many : u32 = 10;
+
+
+fn rayBoundingBoxIntersection(ray : Ray, shape : BVHNode, tMin : f32, tMax: f32) -> HitRecord
+{
+    var hitRecord : HitRecord;
+    var t_min = tMin;
+    var t_max = tMax;
+    var t : f32 = 0;
+    var flipped : bool = false;
+    for (var x: u32 = 0; x < 3; x++)
+    {
+        let invD = 1.0 / ray.direction[x];
+        var t0 = (shape.min[x] - ray.origin[x]) * invD;
+        var t1 = (shape.max[x] - ray.origin[x]) * invD;
+        if(invD < 0.0f)
+        {
+            let temp = t0;
+            t0 = t1;
+            t1 = temp;
+        }
+        if(t0 > t_min)
+        {
+            t_min = t0;
+        }
+        if(t1 < t_max)
+        {
+            t_max = t1;
+        }
+        if(t_min >= t_max)
+        {
+            hitRecord.hit = false;
+            return hitRecord;
+        }
+    }
+    
+    hitRecord.hit = true;
+    return hitRecord;
+}
+
+fn rayBVHIntersection(ray : Ray, tMin : f32, tMax: f32) -> HitRecord
+{
+    var hitRecord : HitRecord;
+    var temp1 : HitRecord;
+    var temp2 : HitRecord;
+    var rec : HitRecord;
+    rec.hit = false;
+    var stack : array<i32, 20>;
+    var top : i32 = -1;
+    top = top + 1;
+    stack[top] = 0;
+    var t_mx : f32 = tMax;
+    while(top >= 0)
+    {
+        let currentNodeIndex = stack[top];
+
+        top = top - 1;
+
+        let currentNode = nodes[currentNodeIndex];
+        hitRecord = rayBoundingBoxIntersection(ray, currentNode, tMin, t_mx);
+        if(hitRecord.hit)
+        {
+            if(currentNode.isLeaf == 1)
+            {
+                temp1 = rayIntersection(ray , objects[currentNode.right], tMin , t_mx);
+                
+                if(temp1.hit)
+                {
+                    t_mx = temp1.t;
+                    rec = temp1;
+                }
+                temp2 = rayIntersection(ray , objects[currentNode.left], tMin , t_mx);
+                if(temp2.hit)
+                {
+                    t_mx= temp2.t;
+                    rec = temp2;
+                }
+            }else{
+
+                top = top + 1;
+                stack[top] = currentNode.right;
+                top = top + 1;
+                stack[top] = currentNode.left;
+
+            }
+        }
+    }
+    if(rec.hit)
+    {
+        return rec;
+    }
+    hitRecord.hit = false;
+    return hitRecord;
+}
 
 fn setupWorld() {
 
-    groundSphere.shape = 1;
-    groundSphere.point = vec3<f32>(0, -1001, 0);;
-    groundSphere.dimension = 1000;
-    groundSphere.albedo = vec3<f32>(0.8, 0.8, 0.8);
+    // for (var x : u32 = 0; x < 4; x++)
+    // {
+    //     objects[x] = objectscpu[x];
+    // }
+
+    // groundSphere.shape = objectscpu[3].shape;
+    // groundSphere.point = objectscpu[3].point;
+    groundSphere.dimension = 1;
+    groundSphere.albedo = vec3<f32>(1, 0, 0);
     groundSphere.material = 1;
-    //objects[0] = groundSphere;
-    // objects[1] = hello[0];
-    // objects[2] = hello[1];
+    groundSphere.etat = 1;
+    groundSphere.fuzziness = 0;
+    //objects[3] = groundSphere;
+    
 }
 
 fn setupCamera() 
@@ -251,8 +362,9 @@ fn rayColor(ray : Ray) -> vec3<f32>
         var nearest : f32 = INFINITY;
         var hitRecord : HitRecord;
         var temp : HitRecord;
-        for (var i: u32 = 0; i < created; i++) {
-            temp = rayIntersection(localRay, objects[i], 0.001, nearest);
+        for (var i: u32 = 0; i < 1; i++) {
+            //temp = rayIntersection(localRay, objects[i], 0.001, nearest);
+            temp = rayBVHIntersection(localRay, 0.001, nearest);
             if(temp.hit)
             {
                 hitAnything = true;
@@ -306,8 +418,12 @@ fn rayColor(ray : Ray) -> vec3<f32>
 
 
     let t2 = 0.5 * (grad + 1.0);
+    let shade = vec3<f32>(0.5, 0.7, 1.0);
+    //let shade = vec3<f32>(f32(nodes[0].right));
+    //let shade = vec3<f32>((nodes[0].max*1)/5);
+    //let shade = vec3<f32>(1,0.4,0.2);
 
-        color += attuenation * ((1.0 - t2) * vec3<f32>(1.0, 1.0, 1.0) + t2 * vec3<f32>(0.5, 0.7, 1.0));
+    color += attuenation * ((1.0 - t2) * vec3<f32>(1.0, 1.0, 1.0) + t2 * shade);
 
     
     return color;

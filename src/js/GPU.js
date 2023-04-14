@@ -1,5 +1,5 @@
-import computeShader from "../shaders/compute.wgsl";
-import renderShader from "../shaders/screen_shader.wgsl";
+import computeShader from '../shaders/compute.wgsl';
+import renderShader from '../shaders/screen_shader.wgsl';
 
 const TILE_WIDTH = 32;
 const TILE_HEIGHT = 32;
@@ -11,17 +11,17 @@ const init = async (WIDTH, HEIGHT) => {
   //Retrieve GPU interface
   const adapter = await navigator.gpu.requestAdapter();
   const device = await adapter.requestDevice();
-  const canvas = document.getElementById("canvas");
-  const context = canvas.getContext("webgpu");
+  const canvas = document.getElementById('canvas');
+  const context = canvas.getContext('webgpu');
 
   // RGBA order, 8 bits, unsigned, normalized
-  const presentationFormat = "rgba8unorm";
+  const presentationFormat = 'rgba8unorm';
   // const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
   context.configure({
     device,
     format: presentationFormat,
-    alphaMode: "opaque",
+    alphaMode: 'opaque',
   });
 
   const color_buffer = device.createTexture({
@@ -39,11 +39,11 @@ const init = async (WIDTH, HEIGHT) => {
   const color_buffer_view = color_buffer.createView();
 
   const sampler = device.createSampler({
-    addressModeU: "repeat",
-    addressModeV: "repeat",
-    magFilter: "linear",
-    minFilter: "nearest",
-    mipmapFilter: "nearest",
+    addressModeU: 'repeat',
+    addressModeV: 'repeat',
+    magFilter: 'linear',
+    minFilter: 'nearest',
+    mipmapFilter: 'nearest',
     maxAnisotropy: 1,
   });
 
@@ -76,8 +76,13 @@ const init = async (WIDTH, HEIGHT) => {
   });
 
   const worldBuffer = device.createBuffer({
-    size: 484 * 16 * Float32Array.BYTES_PER_ELEMENT,
+    size: 500 * 96,
     usage: window.GPUBufferUsage.UNIFORM | window.GPUBufferUsage.COPY_DST,
+  });
+
+  const treeBuffer = device.createBuffer({
+    size: 550 * 48,
+    usage: window.GPUBufferUsage.STORAGE | window.GPUBufferUsage.COPY_DST,
   });
 
   const alt_color_buffer = device.createBuffer({
@@ -91,16 +96,16 @@ const init = async (WIDTH, HEIGHT) => {
         binding: 0,
         visibility: window.GPUShaderStage.COMPUTE,
         storageTexture: {
-          access: "write-only",
+          access: 'write-only',
           format: presentationFormat,
-          viewDimension: "2d",
+          viewDimension: '2d',
         },
       },
       {
         binding: 1,
         visibility: window.GPUShaderStage.COMPUTE,
         buffer: {
-          type: "storage",
+          type: 'storage',
           hasDynamicOffset: false,
           minBindingSize: 0,
         },
@@ -122,7 +127,7 @@ const init = async (WIDTH, HEIGHT) => {
         binding: 4,
         visibility: window.GPUShaderStage.COMPUTE,
         buffer: {
-          type: "storage",
+          type: 'storage',
           hasDynamicOffset: false,
           minBindingSize: 0,
         },
@@ -131,7 +136,7 @@ const init = async (WIDTH, HEIGHT) => {
         binding: 5,
         visibility: window.GPUShaderStage.COMPUTE,
         buffer: {
-          type: "storage",
+          type: 'storage',
           hasDynamicOffset: false,
           minBindingSize: 0,
         },
@@ -140,7 +145,16 @@ const init = async (WIDTH, HEIGHT) => {
         binding: 6,
         visibility: window.GPUShaderStage.COMPUTE,
         buffer: {
-          type: "storage",
+          type: 'storage',
+          hasDynamicOffset: false,
+          minBindingSize: 0,
+        },
+      },
+      {
+        binding: 7,
+        visibility: window.GPUShaderStage.COMPUTE,
+        buffer: {
+          type: 'read-only-storage',
           hasDynamicOffset: false,
           minBindingSize: 0,
         },
@@ -191,7 +205,12 @@ const init = async (WIDTH, HEIGHT) => {
           buffer: alt_color_buffer,
         },
       },
-
+      {
+        binding: 7,
+        resource: {
+          buffer: treeBuffer,
+        },
+      },
     ],
   });
 
@@ -205,7 +224,7 @@ const init = async (WIDTH, HEIGHT) => {
       module: device.createShaderModule({
         code: computeShader,
       }),
-      entryPoint: "main",
+      entryPoint: 'main',
     },
   });
 
@@ -248,13 +267,13 @@ const init = async (WIDTH, HEIGHT) => {
       module: device.createShaderModule({
         code: renderShader,
       }),
-      entryPoint: "vert_main",
+      entryPoint: 'vert_main',
     },
     fragment: {
       module: device.createShaderModule({
         code: renderShader,
       }),
-      entryPoint: "frag_main",
+      entryPoint: 'frag_main',
       targets: [
         {
           format: presentationFormat,
@@ -263,7 +282,7 @@ const init = async (WIDTH, HEIGHT) => {
     },
 
     primitive: {
-      topology: "triangle-list",
+      topology: 'triangle-list',
     },
   });
 
@@ -277,41 +296,36 @@ const init = async (WIDTH, HEIGHT) => {
   elem[2] = 1;
   let tilesr = 0;
 
-  const  frame =  async () => {
+  const frame = async () => {
     device.queue.writeBuffer(tileBuffer, 0, tileBufferArray);
-    
+
     const compute = async () => {
-      if(!rendered)
-      {
+      if (!rendered) {
         const commandEncoder = device.createCommandEncoder();
         const rayTracePass = commandEncoder.beginComputePass();
         rayTracePass.setPipeline(rayTracingPipeline);
         rayTracePass.setBindGroup(0, rayTracingBindGroup);
-        rayTracePass.dispatchWorkgroups(Math.ceil(WIDTH / 16)  , Math.ceil(HEIGHT / 16) , 1);
+        rayTracePass.dispatchWorkgroups(Math.ceil(WIDTH), Math.ceil(HEIGHT), 1);
         rayTracePass.end();
         tilesr = tilesr + 1;
-        elem[0] = elem[0] + 75;
+        elem[0] = elem[0] + 1200;
         //console.log(elem[1])
         //console.log("Sned tile number: ", tilesr)
-        if(elem[0] == 1200)
-        {
+        if (elem[0] == 1200) {
           elem[0] = 0;
-          elem[1] = elem[1] + 50;
-          if(elem[1] == 800){
+          elem[1] = elem[1] + 800;
+          if (elem[1] == 800) {
             elem[1] = 0;
             elem[2] = elem[2] + 1;
-            console.log(elem)
             //rendered = true;
           }
         }
         const commands = commandEncoder.finish();
         device.queue.submit([commands]);
-
       }
-    }
+    };
 
-    if(!started)
-    {
+    if (!started) {
       compute();
       started = false;
     }
@@ -323,8 +337,8 @@ const init = async (WIDTH, HEIGHT) => {
         {
           view: textureView,
           clearValue: { r: 0.5, g: 0.0, b: 0.25, a: 1.0 },
-          loadOp: "clear",
-          storeOp: "store",
+          loadOp: 'clear',
+          storeOp: 'store',
         },
       ],
     };
@@ -337,15 +351,21 @@ const init = async (WIDTH, HEIGHT) => {
     passEncoder.end();
     const commands = commandEncoder.finish();
     device.queue.submit([commands]);
-    await device.queue.onSubmittedWorkDone();
-    console.log('hi')
+    device.queue.onSubmittedWorkDone();
     //compute();
     requestAnimationFrame(frame);
   };
 
-
-
-  return { device, cameraBuffer, viewMatBuffer, worldBuffer, createdBuffer,  frame, tileBuffer};
+  return {
+    device,
+    cameraBuffer,
+    viewMatBuffer,
+    worldBuffer,
+    createdBuffer,
+    frame,
+    tileBuffer,
+    treeBuffer,
+  };
 };
 
 const functions = { init };
