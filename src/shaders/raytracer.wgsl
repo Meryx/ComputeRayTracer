@@ -1,5 +1,5 @@
 @group(0) @binding(0) var color_buffer: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(1) var<storage, read_write> isMeshLoaded: u32;
+@group(0) @binding(1) var<uniform> isMeshLoaded: u32;
 @group(0) @binding(2) var<storage, read_write> numOfTriangles: u32;
 @group(0) @binding(3) var<storage> triangles: array<vec3<u32>>;
 @group(0) @binding(4) var<storage> vertices: array<vec3<f32>>;
@@ -7,6 +7,7 @@
 @group(0) @binding(6) var<storage> perm_y: array<i32, 256>;
 @group(0) @binding(7) var<storage> perm_z: array<i32, 256>;
 @group(0) @binding(8) var<storage> ranfloat: array<vec3<f32>, 256>;
+@group(0) @binding(9) var<storage> texture: array<u32, 524288>;
 
 
 /* Numerical constants */
@@ -167,7 +168,7 @@ fn setupWorld() {
     bigPlane2.etat = 1.5;
     //grayPlane.normal = vec3<f32>(0.0f, 1.0f, 0.0f);
     bigPlane2.fuzziness = 0;
-    bigPlane2.isTextured = 0;
+    bigPlane2.isTextured = 2;
     objects[0] = bigPlane2;
 
     bigPlane1.shape = SPHERE;
@@ -238,6 +239,8 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     pixel_color = pixel_color / f32(samplesPerPixel);
     pixel_color = sqrt(pixel_color);
     textureStore(color_buffer, screenPos, vec4<f32>(pixel_color, 1.0));
+    //textureStore(color_buffer, screenPos, fin);
+
 
     
 }
@@ -247,7 +250,7 @@ fn getUnitSphereUV(point : vec3<f32>) -> vec2<f32>
     let phi = atan2(-point.z, point.x) + PI;
     let theta = acos(-point.y);
 
-    let u = phi / 2.0f * PI;
+    let u = phi / (2.0f * PI);
     let v = theta / PI;
     return vec2<f32>(u,v);
 }
@@ -376,25 +379,30 @@ fn raySphereIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> Hit
     {
         hitRecord.albedo = shape.albedo;
     }
+    else if(shape.isTextured == 2)
+    {
+        let uv = getUnitSphereUV(normal);
+        let u = uv.x;
+        let v = uv.y;
+        let x = i32(1023 * u);
+        let y = 511 - i32(511 * v);
+        let value = texture[x + 1024 * y];
+        let first = (value & 0x000000FFu) >> 0;
+        let second = (value & 0x0000FF00u) >> 8;
+        let third = (value & 0x00FF0000u) >> 16;
+        let fourth = (value & 0xFF000000u) >> 24;
+        let fin = vec4<f32>(
+            f32(first) / 255.0,
+            f32(second) / 255.0,
+            f32(third) / 255.0,
+            f32(fourth) / 255.0
+        );
+        hitRecord.albedo = fin.rgb;
+
+    }
     else
     {
         let uv = getUnitSphereUV(normal);
-        // let sines = sin(10 * surfacePoint.x) * sin(10 * surfacePoint.y) * sin(10 * surfacePoint.z);
-        // //let sines = sin(5 * surfacePoint.x) * sin(5 * surfacePoint.y) * sin(5 * surfacePoint.z);
-        // if(sines < 0)
-        // {
-        //     hitRecord.albedo = vec3<f32>(0.9);
-        // }else{
-        //     hitRecord.albedo = vec3<f32>(0.2, 0.3, 0.1);
-        // }
-
-        //surfacePoint = 4 * surfacePoint;
-
-        
-
-        //let acc = turb(surfacePoint, 7);
-
-        //let noise = (1.0 + acc) * 0.5;
         hitRecord.albedo = (1+ sin(2 * surfacePoint.y) + 5*turb(surfacePoint, 7)) * 0.5  * vec3<f32>(0.8);
         
 

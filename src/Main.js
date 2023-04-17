@@ -5,6 +5,7 @@ import createTextureAndReturnView from './newjs/Texture';
 import {
   createRaytraceProgram,
   loadMeshIntoRayTraceProgram,
+  loadTextureIntoRayTraceProgram,
 } from './newjs/RayTracer';
 import createBuffer from './newjs/Buffer';
 import { WIDTH, HEIGHT, PRESENTATION_FORMAT } from './newjs/Constants';
@@ -105,6 +106,39 @@ const loadMesh = (e) => {
   };
 };
 
+const loadTexture = (e) => {
+  const canvas = document.getElementById('hiddencanvas');
+  const ctx = canvas.getContext('2d');
+  e.preventDefault();
+  const input = document.getElementById('texture-upload-button');
+  const file = input.files[0];
+  const imageUrl = URL.createObjectURL(file);
+  const image = new Image();
+  image.src = imageUrl;
+  image.onload = function () {
+    // Set the canvas size to match the image size
+    canvas.width = image.width;
+    canvas.height = image.height;
+
+    // Draw the image onto the canvas
+    ctx.drawImage(image, 0, 0);
+
+    // Extract the image data (RGBA format) from the canvas
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const { data, width, height } = imageData;
+    loadTextureIntoRayTraceProgram({ data, width, height });
+    requestAnimationFrame(() => renderLoop({ device, context }));
+  };
+
+  // const reader = new FileReader();
+  // reader.readAsBinaryString(file);
+  // reader.onload = (event) => {
+  //   const f = event.target.result;
+  //   const image = decodeJpg({ data: f });
+  //   console.log(image);
+  // };
+};
+
 const renderLoop = ({ device, context }) => {
   const frame = () => {
     /* Raytracing commands */
@@ -149,6 +183,7 @@ let raytraceProgram;
 let quadProgram;
 let device;
 let context;
+let textureArrayBuffer;
 
 const Main = () => {
   const hasMounted = useRef(false);
@@ -181,21 +216,39 @@ const Main = () => {
   return (
     <div className="Main">
       <header className="App-header">
+        <canvas id="hiddencanvas" style={{ display: 'none' }}></canvas>
         <canvas id="canvas" width={WIDTH} height={HEIGHT}></canvas>
-        <div>
-          <form>
-            <label htmlFor="mesh-upload-button">Upload Mesh</label>
-            <input
-              type="file"
-              id="mesh-upload-button"
-              name="file"
-              accept=".obj"
-            />
-            <br />
-            <button type="submit" onClick={loadMesh}>
-              Submit
-            </button>
-          </form>
+        <div className="container">
+          <div>
+            <form>
+              <label htmlFor="mesh-upload-button">Upload Mesh</label>
+              <input
+                type="file"
+                id="mesh-upload-button"
+                name="file"
+                accept=".obj"
+              />
+              <br />
+              <button type="submit" onClick={loadMesh}>
+                Submit
+              </button>
+            </form>
+          </div>
+          <div>
+            <form>
+              <label htmlFor="texture-upload-button">Upload Texture</label>
+              <input
+                type="file"
+                id="texture-upload-button"
+                name="file"
+                accept=".png,.jpg,.jpeg,.bmp"
+              />
+              <br />
+              <button type="submit" onClick={loadTexture}>
+                Submit
+              </button>
+            </form>
+          </div>
         </div>
       </header>
     </div>

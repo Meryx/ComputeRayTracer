@@ -11,6 +11,12 @@ let isMeshLoadedBufferArray;
 let isMeshLoadedArray;
 let isMeshLoadedBufferDescriptor;
 let isMeshLoadedBuffer;
+let textureBuffer;
+
+const loadTextureIntoRayTraceProgram = ({ data, width, height }) => {
+  raytracer.device.queue.writeBuffer(textureBuffer, 0, data.buffer);
+  console.log(data.buffer);
+};
 
 const loadMeshIntoRayTraceProgram = ({
   triangleBuffer,
@@ -85,7 +91,7 @@ const createRaytraceProgram = ({ device, framebuffer }) => {
   isMeshLoadedBufferDescriptor = {
     device,
     size: 4,
-    usageList: ['COPY_DST', 'STORAGE'],
+    usageList: ['COPY_DST', 'UNIFORM'],
   };
   isMeshLoadedBuffer = createBuffer(isMeshLoadedBufferDescriptor);
 
@@ -96,7 +102,7 @@ const createRaytraceProgram = ({ device, framebuffer }) => {
   );
 
   raytracer.addEntry(isMeshLoadedBuffer, 'COMPUTE', 'buffer', {
-    type: 'storage',
+    type: 'uniform',
   });
 
   const numOfTrianglesBufferArray = new ArrayBuffer(4);
@@ -173,6 +179,17 @@ const createRaytraceProgram = ({ device, framebuffer }) => {
     type: 'read-only-storage',
   });
 
+  const textureBufferDescriptor = {
+    device,
+    size: 2097152,
+    usageList: ['COPY_DST', 'STORAGE'],
+  };
+
+  textureBuffer = createBuffer(textureBufferDescriptor);
+  raytracer.addEntry(textureBuffer, 'COMPUTE', 'buffer', {
+    type: 'read-only-storage',
+  });
+
   const perm_xBufferArray = new ArrayBuffer(256 * 4);
   const perm_yBufferArray = new ArrayBuffer(256 * 4);
   const perm_zBufferArray = new ArrayBuffer(256 * 4);
@@ -225,4 +242,8 @@ const randIntRange = (min, max) => {
   return Math.floor(min + Math.random() * (max - min));
 };
 
-export { createRaytraceProgram, loadMeshIntoRayTraceProgram };
+export {
+  createRaytraceProgram,
+  loadMeshIntoRayTraceProgram,
+  loadTextureIntoRayTraceProgram,
+};
