@@ -3,12 +3,16 @@
 @group(0) @binding(2) var<storage, read_write> numOfTriangles: u32;
 @group(0) @binding(3) var<storage> triangles: array<vec3<u32>>;
 @group(0) @binding(4) var<storage> vertices: array<vec3<f32>>;
+@group(0) @binding(5) var<storage> perm_x: array<i32, 256>;
+@group(0) @binding(6) var<storage> perm_y: array<i32, 256>;
+@group(0) @binding(7) var<storage> perm_z: array<i32, 256>;
+@group(0) @binding(8) var<storage> ranfloat: array<vec3<f32>, 256>;
 
 
 /* Numerical constants */
 const PI: f32 = 3.14159265359;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
-const NUM_OF_OBJECTS : u32 = 3;
+const NUM_OF_OBJECTS : u32 = 2;
 const MAX_STACK_SIZE : u32 = 256;
 
 struct Ray {
@@ -41,6 +45,7 @@ struct Shape {
     min: vec3<f32>,
     max: vec3<f32>,
     created: bool,
+    isTextured: u32,
 }
 
 struct BVHNode {
@@ -56,6 +61,8 @@ struct HitRecord {
     point: vec3<f32>,
     normal: vec3<f32>,
     t: f32,
+    u: f32,
+    v: f32,
     hit: bool,
     frontFace: bool,
     material: u32,
@@ -84,15 +91,15 @@ fn setupCamera()
 
     let focalDistance: f32 = 1.0;
     let aspectRatio: f32 = 3.0 / 2.0;
-    let fov : f32 = 90;
+    let fov : f32 = 20;
     let theta = degreesToRadians(fov);
     let h = tan(theta/2);
     let viewportHeight = 2.0 * h;
     let viewportWidth = aspectRatio * viewportHeight;
 
-    let lookFrom = vec3<f32>(0,0,1);
+    let lookFrom = vec3<f32>(13,2,3);
     let lookAt = vec3<f32>(0,0,0);
-    let aperture = 0.1;
+    let aperture = 0.001;
     let focusDist : f32 = 2;
     let vup = vec3<f32>(0,1,0);
     let w = normalize(lookFrom - lookAt);
@@ -118,6 +125,8 @@ var<private> nodes : array<BVHNode, 2 * NUM_OF_OBJECTS>;
 var<private> worldCamera : Camera;
 var<private> redSphere : Shape;
 var<private> grayPlane : Shape;
+var<private> bigPlane1 : Shape;
+var<private> bigPlane2 : Shape;
 var<private> blueBoundingBox : Shape;
 
 fn setupWorld() {
@@ -129,21 +138,50 @@ fn setupWorld() {
     redSphere.dimension = 0.7;
     
     redSphere.material = 1;
+    redSphere.isTextured = 0;
 
     redSphere.albedo = vec3<f32>(0.0, 0.8, 0.0);
-    objects[0] = redSphere;
+    //objects[0] = redSphere;
 
     grayPlane.shape = SPHERE;
     grayPlane.point = vec3<f32>(0.0, -1001, -1.5f);
     grayPlane.point1 = vec3<f32>(0.0, -1001, -1.5f);
     grayPlane.albedo = vec3<f32>(0.7, 0.7, 0.7);
-    grayPlane.material = 2;
+    grayPlane.material = 1;
     grayPlane.time0 = 0;
     grayPlane.time1 = 1;
     grayPlane.dimension = 1000.0f;
     //grayPlane.normal = vec3<f32>(0.0f, 1.0f, 0.0f);
     grayPlane.fuzziness = 0.1;
-    objects[1] = grayPlane;
+    grayPlane.isTextured = 1;
+    //objects[1] = grayPlane;
+
+    bigPlane2.shape = SPHERE;
+    bigPlane2.point = vec3<f32>(0.0, 1, -0.5f);
+    bigPlane2.point1 = vec3<f32>(0.0, 1, -0.5f);
+    bigPlane2.albedo = vec3<f32>(1,0.4,0);
+    bigPlane2.material = 1;
+    bigPlane2.time0 = 0;
+    bigPlane2.time1 = 1;
+    bigPlane2.dimension = 2.0f;
+    bigPlane2.etat = 1.5;
+    //grayPlane.normal = vec3<f32>(0.0f, 1.0f, 0.0f);
+    bigPlane2.fuzziness = 0;
+    bigPlane2.isTextured = 0;
+    objects[0] = bigPlane2;
+
+    bigPlane1.shape = SPHERE;
+    bigPlane1.point = vec3<f32>(0.0, -1001, -1.5f);
+    bigPlane1.point1 = vec3<f32>(0.0, -1001, -1.5f);
+    bigPlane1.albedo = vec3<f32>(0.7, 0.7, 0.7);
+    bigPlane1.material = 1;
+    bigPlane1.time0 = 0;
+    bigPlane1.time1 = 1;
+    bigPlane1.dimension = 1000.0f;
+    //grayPlane.normal = vec3<f32>(0.0f, 1.0f, 0.0f);
+    bigPlane1.fuzziness = 0.1;
+    bigPlane1.isTextured = 1;
+    objects[1] = bigPlane1;
 
     blueBoundingBox.min = vec3<f32>(-2.5, -1.1, -2.0);
     blueBoundingBox.max = vec3<f32>(1.5, -0.8, -1.0);
@@ -198,9 +236,20 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         pixel_color += rayColor(ray);
     }
     pixel_color = pixel_color / f32(samplesPerPixel);
+    pixel_color = sqrt(pixel_color);
     textureStore(color_buffer, screenPos, vec4<f32>(pixel_color, 1.0));
 
     
+}
+
+fn getUnitSphereUV(point : vec3<f32>) -> vec2<f32>
+{
+    let phi = atan2(-point.z, point.x) + PI;
+    let theta = acos(-point.y);
+
+    let u = phi / 2.0f * PI;
+    let v = theta / PI;
+    return vec2<f32>(u,v);
 }
 
 fn getShapePoint(shape : Shape, time : f32) -> vec3<f32>
@@ -266,15 +315,32 @@ fn computeBoundingBox(shape : Shape) -> Shape
     return boundingBox;
 }
 
+fn perlin_generate_perm() -> array<u32, 256>
+{
+    var point_count : array<u32, 256>;
+    for (var x : u32 = 0; x < 256; x++)
+    {
+        point_count[x] = x;
+    }
+    for (var x : u32 = 255; x > 0; x--)
+    {
+        let t = randIntRange(0, i32(x));
+        let temp = point_count[x];
+        point_count[x] = point_count[t];
+        point_count[t] = temp;
+    }
+    return point_count;
+}
+
 fn raySphereIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord
 {
     var hitRecord : HitRecord;
-    let point = getShapePoint(shape, ray.time);
-    let oc = ray.origin - point; //Vector from sphere center to ray origin
-    let a = lengthSquared(ray.direction);
-    let half_b = dot(oc, ray.direction);
-    let c = lengthSquared(oc) - shape.dimension * shape.dimension;
-    let discriminant = half_b * half_b - a * c; // (0.5b)^2 - a * c
+    var point : vec3<f32> = getShapePoint(shape, ray.time);
+    var oc : vec3<f32> = ray.origin - point; //Vector from sphere center to ray origin
+    var a  : f32 = lengthSquared(ray.direction);
+    var half_b : f32 = dot(oc, ray.direction);
+    var c  : f32 = lengthSquared(oc) - shape.dimension * shape.dimension;
+    var discriminant  : f32 = half_b * half_b - a * c; // (0.5b)^2 - a * c
 
     //No intersection
     if(discriminant < 0)
@@ -284,7 +350,7 @@ fn raySphereIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> Hit
     }
 
 
-    let sqrtd = sqrt(discriminant);
+    var sqrtd : f32 = sqrt(discriminant);
     var root : f32 = (-half_b - sqrtd) / a;
     if(root < tMin || root > tMax)
     {
@@ -296,20 +362,114 @@ fn raySphereIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> Hit
         }
     }
 
-    let surfacePoint = rayAt(ray, root);
-    let normal = normalize(hitRecord.point - point);
+    var surfacePoint : vec3<f32> = rayAt(ray, root);
+    var normal : vec3<f32> = normalize(surfacePoint - point);
 
     //Assign hit record properties
     hitRecord.hit = true;
     hitRecord.t = root;
     hitRecord.point = surfacePoint;
     hitRecord.normal = faceForward(normal, normal, ray.direction);
+    //hitRecord.normal = normal;
     hitRecord.frontFace = isEqual(normal, hitRecord.normal);
-    hitRecord.albedo = shape.albedo;
+    if(shape.isTextured == 0)
+    {
+        hitRecord.albedo = shape.albedo;
+    }
+    else
+    {
+        let uv = getUnitSphereUV(normal);
+        // let sines = sin(10 * surfacePoint.x) * sin(10 * surfacePoint.y) * sin(10 * surfacePoint.z);
+        // //let sines = sin(5 * surfacePoint.x) * sin(5 * surfacePoint.y) * sin(5 * surfacePoint.z);
+        // if(sines < 0)
+        // {
+        //     hitRecord.albedo = vec3<f32>(0.9);
+        // }else{
+        //     hitRecord.albedo = vec3<f32>(0.2, 0.3, 0.1);
+        // }
+
+        //surfacePoint = 4 * surfacePoint;
+
+        
+
+        //let acc = turb(surfacePoint, 7);
+
+        //let noise = (1.0 + acc) * 0.5;
+        hitRecord.albedo = (1+ sin(2 * surfacePoint.y) + 5*turb(surfacePoint, 7)) * 0.5  * vec3<f32>(0.8);
+        
+
+        
+
+    }
+    
     hitRecord.material = shape.material;
     hitRecord.fuzziness = shape.fuzziness;
     hitRecord.etat = shape.etat;
     return hitRecord;
+}
+
+fn turb(surfacePoint : vec3<f32>, depth : i32) -> f32
+{
+    var acc : f32 = 0.0;
+    var p : vec3<f32> = surfacePoint;
+    var weight : f32 = 1.0;
+    for(var x : i32 = 0; x < depth; x++)
+    {
+        acc = acc + weight*noise(p);
+        weight = 0.5 * weight;
+        p = 2.0 * p;
+    }
+    return abs(acc);
+}
+
+
+
+fn noise(surfacePoint : vec3<f32>) -> f32
+{
+    var u : f32 = surfacePoint.x - floor(surfacePoint.x);
+        var v : f32 = surfacePoint.y - floor(surfacePoint.y);
+        var w : f32  = surfacePoint.z - floor(surfacePoint.z);
+
+        u = u*u*(3-2*u);
+        v = v*v*(3-2*v);
+        w = w*w*(3-2*w);
+
+        let i = i32(floor(surfacePoint.x));
+        let j = i32(floor(surfacePoint.y));
+        let k = i32(floor(surfacePoint.z));
+
+        
+        
+        var cell : array<array<array<vec3<f32>, 2>,2>, 2>;
+    
+        for(var di : i32 = 0; di < 2; di++)
+        {
+            for(var dj : i32 = 0; dj < 2; dj++)
+            {
+                for(var dk : i32 = 0; dk < 2; dk++)
+                {
+                    cell[di][dj][dk] = ranfloat[
+                        perm_x[(i + di) & 255] ^
+                        perm_y[(j + dj) & 255] ^
+                        perm_z[(k + dk) & 255]
+                    ];
+                }
+            }
+        }
+    var acc : f32 = 0.0;
+        for (var a : i32 = 0; a < 2; a++)
+        {
+            for(var b : i32 =0; b < 2; b++)
+            {
+                for(var c : i32 = 0; c < 2; c++)
+                {
+                    let weight = vec3<f32>(u-f32(a), v-f32(b), w-f32(c));
+                    acc = acc + (f32(a) * u + (1-f32(a)) * (1-u))*(f32(b) * v + (1-f32(b)) * (1 - v)) * (f32(c) * w + (1 - f32(c)) * (1 - w)) * dot(cell[a][b][c], weight);
+                    //acc = acc + (f32(a) * su + (1-f32(a)) * (1-u))*(f32(b) * v + (1-f32(b)) * (1 - v)) * (f32(c) * w + (1 - f32(c)) * (1 - w)) * cell[a][b][c];
+                }
+            }
+        }
+        return acc;
 }
 
 fn rayPlaneIntersection(ray : Ray, shape : Shape, tMin : f32, tMax: f32) -> HitRecord
@@ -607,15 +767,9 @@ fn rayColor(ray : Ray) -> vec3<f32>
         {
             for (var i: u32 = 0; i < NUM_OF_OBJECTS; i++) 
             {
-                if(i32(i) == mask)
-                {
-                    continue;
-                }
-
                 temp = rayIntersection(localRay, objects[i], 0.001, nearest);
                 if(temp.hit)
                 {
-                    carryMask = i32(i);
                     hitAnything = true;
                     nearest = temp.t;
                     hitRecord = temp;
@@ -631,7 +785,7 @@ fn rayColor(ray : Ray) -> vec3<f32>
             localRay.origin = hitRecord.point;
             if(hitRecord.material == 1)
             {
-                mask = -1;
+
                 localRay.direction = hitRecord.normal + randomUnitVector();
                 if(nearZero(localRay.direction))
                 {
@@ -640,7 +794,7 @@ fn rayColor(ray : Ray) -> vec3<f32>
             }
             if(hitRecord.material == 2)
             {
-                mask = -1;
+
                 localRay.direction = reflect(normalize(localRay.direction), hitRecord.normal) + hitRecord.fuzziness * randomInUnitSphere();
                 if(dot(localRay.direction, hitRecord.normal) < 0)
                 {
@@ -649,7 +803,6 @@ fn rayColor(ray : Ray) -> vec3<f32>
             }
             if(hitRecord.material == 3)
             {
-                mask = -1;
                 let etaiOverEtat = select(hitRecord.etat, 1.0/hitRecord.etat, hitRecord.frontFace);
                 let unitDirection = normalize(localRay.direction);
                 let cosTheta = min(dot(-unitDirection, hitRecord.normal), 1.0);
@@ -662,7 +815,6 @@ fn rayColor(ray : Ray) -> vec3<f32>
             }
             if(hitRecord.material == 4)
             {
-                mask = carryMask;
                 localRay.direction = hitRecord.normal + randomUnitVector();
                 if(nearZero(localRay.direction))
                 {
@@ -672,6 +824,7 @@ fn rayColor(ray : Ray) -> vec3<f32>
             }
 
             attuenation *= hitRecord.albedo;
+            //attuenation = vec3<f32>(min(attuenation.x, hitRecord.albedo.x),min(attuenation.y, hitRecord.albedo.y),min(attuenation.z, hitRecord.albedo.z))
         }
         else
         {
@@ -720,6 +873,14 @@ fn lcg()->u32{
   let LCG_C = 1013904223u;
   seed = (LCG_A * seed + LCG_C);
   return seed & 0x00FFFFFF;
+}
+
+fn randIntRange(min : i32, max : i32) -> i32
+{
+    let minf = f32(min);
+    let maxf = f32(max);
+    let num =  minf + rand() * (maxf - minf);
+    return i32(num);
 }
 
 fn randRange(min : f32, max : f32) -> f32

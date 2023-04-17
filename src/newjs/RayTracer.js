@@ -17,7 +17,6 @@ const loadMeshIntoRayTraceProgram = ({
   vertexBuffer,
   numOfTriangles,
 }) => {
-  console.log(raytracer.entries);
   raytracer.entries = raytracer.entries.slice(0, 2);
 
   const numOfTrianglesBufferArray = new ArrayBuffer(4);
@@ -134,9 +133,96 @@ const createRaytraceProgram = ({ device, framebuffer }) => {
     type: 'read-only-storage',
   });
 
+  const perm_xBufferDescriptor = {
+    device,
+    size: 256 * 4,
+    usageList: ['COPY_DST', 'STORAGE'],
+  };
+  const perm_xBuffer = createBuffer(perm_xBufferDescriptor);
+  raytracer.addEntry(perm_xBuffer, 'COMPUTE', 'buffer', {
+    type: 'read-only-storage',
+  });
+
+  const perm_yBufferDescriptor = {
+    device,
+    size: 256 * 4,
+    usageList: ['COPY_DST', 'STORAGE'],
+  };
+  const perm_yBuffer = createBuffer(perm_yBufferDescriptor);
+  raytracer.addEntry(perm_yBuffer, 'COMPUTE', 'buffer', {
+    type: 'read-only-storage',
+  });
+
+  const perm_zBufferDescriptor = {
+    device,
+    size: 256 * 4,
+    usageList: ['COPY_DST', 'STORAGE'],
+  };
+  const perm_zBuffer = createBuffer(perm_zBufferDescriptor);
+  raytracer.addEntry(perm_zBuffer, 'COMPUTE', 'buffer', {
+    type: 'read-only-storage',
+  });
+
+  const ranfloatBufferDescriptor = {
+    device,
+    size: 256 * 16,
+    usageList: ['COPY_DST', 'STORAGE'],
+  };
+  const ranfloatBuffer = createBuffer(ranfloatBufferDescriptor);
+  raytracer.addEntry(ranfloatBuffer, 'COMPUTE', 'buffer', {
+    type: 'read-only-storage',
+  });
+
+  const perm_xBufferArray = new ArrayBuffer(256 * 4);
+  const perm_yBufferArray = new ArrayBuffer(256 * 4);
+  const perm_zBufferArray = new ArrayBuffer(256 * 4);
+  const ranfloatBufferArray = new ArrayBuffer(256 * 16);
+
+  const perm_xArray = new Int32Array(perm_xBufferArray);
+  const perm_yArray = new Int32Array(perm_yBufferArray);
+  const perm_zArray = new Int32Array(perm_zBufferArray);
+  const ranfloatArray = new Float32Array(ranfloatBufferArray);
+
+  const ranf = (min, max) => {
+    return min + Math.random() * (max - min);
+  };
+  for (let x = 0; x < 256; x++) {
+    ranfloatArray[x * 4] = ranf(-1, 1);
+    ranfloatArray[x * 4 + 1] = ranf(-1, 1);
+    ranfloatArray[x * 4 + 2] = ranf(-1, 1);
+  }
+
+  perlin_generate_perm(perm_xArray);
+  perlin_generate_perm(perm_yArray);
+  perlin_generate_perm(perm_zArray);
+
+  raytracer.device.queue.writeBuffer(perm_xBuffer, 0, perm_xBufferArray);
+
+  raytracer.device.queue.writeBuffer(perm_yBuffer, 0, perm_yBufferArray);
+
+  raytracer.device.queue.writeBuffer(perm_zBuffer, 0, perm_zBufferArray);
+
+  raytracer.device.queue.writeBuffer(ranfloatBuffer, 0, ranfloatBufferArray);
+
   raytracer.addShader(computeShader, 'compute');
   raytracer.compileComputeProgram();
   return raytracer;
+};
+
+const perlin_generate_perm = (arr) => {
+  for (let x = 0; x < 256; x++) {
+    arr[x] = x;
+  }
+  for (let x = 255; x > 0; x--) {
+    let t = randIntRange(0, x);
+    let temp = arr[x];
+    arr[x] = arr[t];
+    arr[t] = temp;
+  }
+};
+
+const randIntRange = (min, max) => {
+  return Math.floor(min + Math.random() * (max - min));
 };
 
 export { createRaytraceProgram, loadMeshIntoRayTraceProgram };

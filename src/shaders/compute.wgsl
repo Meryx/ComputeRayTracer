@@ -268,7 +268,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         pixel_color += rayColor(ray);
     }
     pixel_color = pixel_color / f32(samplesPerPixel);
-    //pixel_color = sqrt(pixel_color);
+    pixel_color = sqrt(pixel_color);
 
     pixel_color =  pixel_color / f32(samplesPerPixel);
     alt_color_buffer[screenPos.x + 1200 * screenPos.y] = alt_color_buffer[screenPos.x + 1200 * screenPos.y] + pixel_color;
