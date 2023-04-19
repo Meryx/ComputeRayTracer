@@ -232,15 +232,17 @@ fn compare(v1 : vec3<f32>, v2 : vec3<f32>) -> bool
 
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
-    seed = u32(tile.z);
     
-    setupWorld();
+    
+    
 
     /* Data passed from the CPU */
 
 
     let screenSize: vec2<u32> = textureDimensions(color_buffer);
     let screenPos : vec2<i32> = vec2<i32>(tile.x + i32(GlobalInvocationID.x), tile.y + i32(GlobalInvocationID.y));
+    seed = tea(u32(screenPos.x + screenPos.y * 1200), u32(tile.z));
+    setupWorld();
     // let horizontal_coefficient: f32 = (f32(screen_pos.x) + 0.5) / f32(screen_size.x);
     // let vertical_coefficient: f32 = (f32(screen_size.y) - f32(screen_pos.y) + 0.5) / f32(screen_size.y);
 
@@ -267,12 +269,13 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         ray.direction = worldCamera.lowerLeftCorner + u * worldCamera.horizontal + v * worldCamera.vertical - worldCamera.origin - offset;
         pixel_color += rayColor(ray);
     }
-    pixel_color = pixel_color / f32(samplesPerPixel);
-    pixel_color = sqrt(pixel_color);
 
-    pixel_color =  pixel_color / f32(samplesPerPixel);
+    
+
+
     alt_color_buffer[screenPos.x + 1200 * screenPos.y] = alt_color_buffer[screenPos.x + 1200 * screenPos.y] + pixel_color;
     pixel_color = alt_color_buffer[screenPos.x + 1200 * screenPos.y] / f32(tile.z);
+    pixel_color = sqrt(pixel_color);
     textureStore(color_buffer, screenPos, vec4<f32>(pixel_color, 1.0));
 
     

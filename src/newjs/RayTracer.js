@@ -12,10 +12,18 @@ let isMeshLoadedArray;
 let isMeshLoadedBufferDescriptor;
 let isMeshLoadedBuffer;
 let textureBuffer;
+let samplesBuffer;
+let samples = 0;
+
+const incrementSample = () => {
+  samples = samples + 1;
+  const samplesArray = new Uint32Array(1);
+  samplesArray[0] = samples;
+  raytracer.device.queue.writeBuffer(samplesBuffer, 0, samplesArray.buffer);
+};
 
 const loadTextureIntoRayTraceProgram = ({ data, width, height }) => {
   raytracer.device.queue.writeBuffer(textureBuffer, 0, data.buffer);
-  console.log(data.buffer);
 };
 
 const loadMeshIntoRayTraceProgram = ({
@@ -31,12 +39,12 @@ const loadMeshIntoRayTraceProgram = ({
   const numOfTrianglesBufferDescriptor = {
     device: raytracer.device,
     size: 4,
-    usageList: ['COPY_DST', 'STORAGE'],
+    usageList: ['COPY_DST', 'UNIFORM'],
   };
   const numOfTrianglesBuffer = createBuffer(numOfTrianglesBufferDescriptor);
 
   raytracer.addEntry(numOfTrianglesBuffer, 'COMPUTE', 'buffer', {
-    type: 'storage',
+    type: 'uniform',
   });
 
   raytracer.addEntry(triangleBuffer, 'COMPUTE', 'buffer', {
@@ -111,12 +119,12 @@ const createRaytraceProgram = ({ device, framebuffer }) => {
   const numOfTrianglesBufferDescriptor = {
     device: raytracer.device,
     size: 4,
-    usageList: ['COPY_DST', 'STORAGE'],
+    usageList: ['COPY_DST', 'UNIFORM'],
   };
   const numOfTrianglesBuffer = createBuffer(numOfTrianglesBufferDescriptor);
 
   raytracer.addEntry(numOfTrianglesBuffer, 'COMPUTE', 'buffer', {
-    type: 'storage',
+    type: 'uniform',
   });
 
   const triangleBufferDescriptor = {
@@ -190,6 +198,30 @@ const createRaytraceProgram = ({ device, framebuffer }) => {
     type: 'read-only-storage',
   });
 
+  const altColorBufferDescriptor = {
+    device,
+    size: 640000 * 16,
+    usageList: ['COPY_DST', 'STORAGE'],
+  };
+
+  const altColorBuffer = createBuffer(altColorBufferDescriptor);
+  raytracer.addEntry(altColorBuffer, 'COMPUTE', 'buffer', {
+    type: 'storage',
+  });
+
+  const samplesBufferDescriptor = {
+    device,
+    size: 4,
+    usageList: ['COPY_DST', 'UNIFORM'],
+  };
+
+  samplesBuffer = createBuffer(samplesBufferDescriptor);
+  raytracer.addEntry(samplesBuffer, 'COMPUTE', 'buffer', {
+    type: 'uniform',
+  });
+
+  incrementSample();
+
   const perm_xBufferArray = new ArrayBuffer(256 * 4);
   const perm_yBufferArray = new ArrayBuffer(256 * 4);
   const perm_zBufferArray = new ArrayBuffer(256 * 4);
@@ -246,4 +278,5 @@ export {
   createRaytraceProgram,
   loadMeshIntoRayTraceProgram,
   loadTextureIntoRayTraceProgram,
+  incrementSample,
 };

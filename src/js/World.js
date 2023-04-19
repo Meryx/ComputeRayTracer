@@ -59,9 +59,9 @@ const init = () => {
 
   let groundSphere = {};
   groundSphere.shape = 1;
-  groundSphere.point = [0, -1001, 0];
+  groundSphere.point = [0, -1000, 0];
   groundSphere.dimension = 1000;
-  groundSphere.albedo = [0.8, 0.8, 0.8];
+  groundSphere.albedo = [0.5, 0.5, 0.5];
   groundSphere.material = 1;
   groundSphere.fuziness = 0;
   groundSphere.etat = 1.0;

@@ -6,6 +6,7 @@ import {
   createRaytraceProgram,
   loadMeshIntoRayTraceProgram,
   loadTextureIntoRayTraceProgram,
+  incrementSample,
 } from './newjs/RayTracer';
 import createBuffer from './newjs/Buffer';
 import { WIDTH, HEIGHT, PRESENTATION_FORMAT } from './newjs/Constants';
@@ -140,17 +141,23 @@ const loadTexture = (e) => {
 };
 
 const renderLoop = ({ device, context }) => {
-  const frame = () => {
-    /* Raytracing commands */
-    const raytraceCommandEncoder = device.createCommandEncoder();
-    const rayTracePass = raytraceCommandEncoder.beginComputePass();
-    rayTracePass.setPipeline(raytraceProgram.getPipeline());
-    rayTracePass.setBindGroup(0, raytraceProgram.getBindGroup());
-    rayTracePass.dispatchWorkgroups(WIDTH, HEIGHT, 1);
-    rayTracePass.end();
-    const raytraceCommands = raytraceCommandEncoder.finish();
-    device.queue.submit([raytraceCommands]);
-    /* Raytracing END */
+  let rendered = false;
+  const frame = async () => {
+    if (true) {
+      /* Raytracing commands */
+      const raytraceCommandEncoder = device.createCommandEncoder();
+      const rayTracePass = raytraceCommandEncoder.beginComputePass();
+      rayTracePass.setPipeline(raytraceProgram.getPipeline());
+      rayTracePass.setBindGroup(0, raytraceProgram.getBindGroup());
+      rayTracePass.dispatchWorkgroups(WIDTH, HEIGHT, 1);
+      rayTracePass.end();
+      const raytraceCommands = raytraceCommandEncoder.finish();
+      device.queue.submit([raytraceCommands]);
+      rendered = true;
+      incrementSample();
+
+      /* Raytracing END */
+    }
 
     /* Sample texture populated by raytracer */
     const texture = context.getCurrentTexture();
@@ -175,6 +182,8 @@ const renderLoop = ({ device, context }) => {
     const commands = commandEncoder.finish();
     device.queue.submit([commands]);
     /* Rendering END */
+    await device.queue.onSubmittedWorkDone();
+    requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
 };
