@@ -30,7 +30,7 @@ class Renderer {
       const computePassEncoder = commandEncoder.beginComputePass();
       computePassEncoder.setPipeline(computePipeline);
       computePassEncoder.setBindGroup(0, computePipelineBindGroup);
-      computePassEncoder.dispatchWorkgroups(1920, 1080, 1);
+      computePassEncoder.dispatchWorkgroups(1366, 768, 1);
       computePassEncoder.end();
       const renderPassEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
       renderPassEncoder.setPipeline(renderPipeline);
@@ -66,8 +66,8 @@ const Main = async () => {
 
   const framebufferDescriptor = {
     size: {
-      width: 1920,
-      height: 1080,
+      width: 1366,
+      height: 768,
     },
     format,
     usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
