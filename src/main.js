@@ -169,22 +169,104 @@ const Main = async () => {
   const scene = {};
 
   const redSphere = {
-    geometry: vec4.fromValues(0.0, 0.5, -0.5, 0.8),
+    geometry: vec4.fromValues(0.0, -3.0, 978, 10),
+    index: 0,
   };
 
   const groundSphere = {
     geometry: vec4.fromValues(0.0, -100.5, -1.0, 100.0),
+    index: 1,
   };
 
-  scene.objects = [redSphere, groundSphere];
+  scene.objects = [redSphere];
+
+  let stride = 32;
 
   const { objects } = scene;
-  const objectData = new Float32Array(objects.length * 4);
+  const objectData = new ArrayBuffer(objects.length * stride);
   objects.forEach((object, index) => {
-    objectData.set(object.geometry, index * 4);
+    const geometryView = new Float32Array(objectData, index * stride, 4);
+    const indexView = new Uint32Array(objectData, index * stride + 16, 1);
+    geometryView.set(object.geometry);
+    indexView.set([object.index]);
   });
   const objectBuffer = device.createBuffer({
     size: objectData.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
+  const bluePlanarPatch = {
+    origin: vec3.fromValues(-800, -1000, 700.0),
+    edge1: vec3.fromValues(0, 0.0, -1200),
+    edge2: vec3.fromValues(0.0, 2200, 0.0),
+    index: 2,
+  };
+
+  const rightPlanarPatch = {
+    origin: vec3.fromValues(800, -1000, 700.0),
+    edge1: vec3.fromValues(0.0, 2200, 0.0),
+    edge2: vec3.fromValues(0, 0.0, -1200),
+    index: 3,
+  };
+
+  const topPlanarPatch = {
+    origin: vec3.fromValues(-1200, 1000, 700.0),
+    edge2: vec3.fromValues(2400, 0.0, 0),
+    edge1: vec3.fromValues(0.0, 0, -1800.0),
+    index: 4,
+  };
+
+  const backPlanarPatch = {
+    origin: vec3.fromValues(-1200, -1000, -500.0),
+    edge2: vec3.fromValues(0.0, 2000, 0),
+    edge1: vec3.fromValues(2400, 0.0, 0),
+    index: 5,
+  };
+
+  const bottomPlanarPatch = {
+    origin: vec3.fromValues(-1200, -1500, 500.0),
+    edge1: vec3.fromValues(2400, 0.0, 0),
+    edge2: vec3.fromValues(0.0, 0, -1800.0),
+    index: 6,
+  };
+
+  scene.planarPatches = [
+    topPlanarPatch,
+    bluePlanarPatch,
+    rightPlanarPatch,
+    backPlanarPatch,
+    bottomPlanarPatch,
+  ];
+  stride = 48;
+  const planarPatchesData = new ArrayBuffer(
+    scene.planarPatches.length * stride
+  );
+
+  scene.planarPatches.forEach((planarPatch, index) => {
+    const originView = new Float32Array(planarPatchesData, index * stride, 3);
+    const edge1View = new Float32Array(
+      planarPatchesData,
+      index * stride + 16,
+      3
+    );
+    const edge2View = new Float32Array(
+      planarPatchesData,
+      index * stride + 32,
+      3
+    );
+    const indexView = new Uint32Array(
+      planarPatchesData,
+      index * stride + 44,
+      1
+    );
+    originView.set(planarPatch.origin);
+    edge1View.set(planarPatch.edge1);
+    edge2View.set(planarPatch.edge2);
+    indexView.set([planarPatch.index]);
+  });
+
+  const planarPatchesBuffer = device.createBuffer({
+    size: planarPatchesData.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
@@ -231,6 +313,13 @@ const Main = async () => {
           type: "uniform",
         },
       },
+      {
+        binding: 4,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "read-only-storage",
+        },
+      },
     ],
   });
 
@@ -262,6 +351,13 @@ const Main = async () => {
           size: 4,
         },
       },
+      {
+        binding: 4,
+        resource: {
+          buffer: planarPatchesBuffer,
+          size: planarPatchesData.byteLength,
+        },
+      },
     ],
   });
 
@@ -280,6 +376,7 @@ const Main = async () => {
   });
 
   device.queue.writeBuffer(objectBuffer, 0, objectData);
+  device.queue.writeBuffer(planarPatchesBuffer, 0, planarPatchesData);
 
   const renderer = new Renderer({ device, context, scene, sample });
   renderer.render({

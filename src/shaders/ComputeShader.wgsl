@@ -2,13 +2,23 @@
 @group(0) @binding(1) var<storage> primitives : array<Sphere>;
 @group(0) @binding(2) var<storage, read_write> alt_color_buffer : array<vec3<f32>>;
 @group(0) @binding(3) var<uniform> sample : u32;
+@group(0) @binding(4) var<storage> planar_patches : array<PlanarPatch>;
+
 
 const PI: f32 = 3.14159265359;
 const roughness: f32 = 0.4;
 const metallic: f32 = 0.1;
 
 struct Sphere {
-    geometry: vec4<f32>
+    geometry: vec4<f32>,
+    index: u32
+};
+
+struct PlanarPatch {
+  origin: vec3<f32>,
+  edge1: vec3<f32>,
+  edge2: vec3<f32>,
+  index: u32
 };
 
 struct Ray {
@@ -24,18 +34,23 @@ struct HitRecord {
   index: u32
 };
 
-var<private> light_source : vec3<f32> = vec3<f32>(0.0, 2.8, -0.2);
-var<private> light_color : vec3<f32> = vec3<f32>(75.0, 75.0, 75.0);
-var<private> light_center : vec3<f32> = vec3<f32>(0.0, 2.8, -0.2);
-var<private> light_radius : f32 = 1.0;
-var<private> albedo : array<vec3<f32>, 2>;
+var<private> light_source : vec3<f32> = vec3<f32>(0.0, 0.0, 998);
+var<private> light_color : vec3<f32> = vec3<f32>(1000000.0, 1000000.0, 1000000.0);
+var<private> light_center : vec3<f32> = vec3<f32>(0.0, 500.0, 998);
+var<private> light_radius : f32 = 100.0;
+var<private> albedo : array<vec3<f32>, 7>;
 
 @compute 
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
-  albedo[0] = vec3<f32>(0.7, 0.7, 0.7);
+  albedo[0] = vec3<f32>(0.7, 0.0, 0.7);
   albedo[1] = vec3<f32>(0.7, 0.7, 0.0);
+  albedo[2] = vec3<f32>(1.0, 0, 0);
+  albedo[3] = vec3<f32>(0.0, 1.0, 0.0);
+  albedo[4] = vec3<f32>(0.0, 0.0, 1.0);
+  albedo[5] = vec3<f32>(1.0, 1.0, 1.0);
+  albedo[6] = vec3<f32>(0.0, 0.0, 1.0);
 
     let screen_size: vec2<u32> = textureDimensions(framebuffer);
     if(GlobalInvocationID.x >= screen_size.x || GlobalInvocationID.y >= screen_size.y) {
@@ -49,21 +64,26 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     let ambient = vec3<f32>(0.08) * vec3<f32>(1.0);
     var shadow : bool = false;
 
-    let lower_left_corner : vec3<f32> = vec3<f32>(-2.0, -1.0, 1.0);
+    let lower_left_corner : vec3<f32> = vec3<f32>(-2.0, -1.0, 999.0);
     let horizontal : vec3<f32> = vec3<f32>(4.0, 0.0, 0.0);
     let vertical : vec3<f32> = vec3<f32>(0.0, 2.0, 0.0);
     let u : f32 = (f32(screen_pos.x) + 0.5) / f32(screen_size.x);
     let v : f32 = (f32(screen_size.y) - f32(screen_pos.y) + 0.5) / f32(screen_size.y);
     var ray : Ray;
-    ray.origin = vec3<f32>(0.0, 0.0, 2.0);
+    ray.origin = vec3<f32>(0.0, 0.0, 1000.0);
     ray.direction = normalize(lower_left_corner + u * horizontal + v * vertical - ray.origin);
     var hit_record : HitRecord;
     hit_record.hit = false;
     hit_record.t = 100000.0;
-    hit_record.index = 1u;
+    hit_record.index = 100u;
     light_source = sample_surface_circle(light_center, light_radius);
     for (var i = 0u; i < arrayLength(&primitives); i = i + 1u) {
-      ray_sphere_intersection(primitives[i] , ray, &hit_record, i);
+      ray_sphere_intersection(primitives[i] , ray, &hit_record);
+    }
+
+    for(var i = 0u; i < arrayLength(&planar_patches); i = i + 1u)
+    {
+      ray_patch_intersection(planar_patches[i], ray, &hit_record);
     }
 
     if(!hit_record.hit)
@@ -72,7 +92,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
       return;
     }
     for (var j = 0u; j < arrayLength(&primitives); j = j + 1u) {
-      if(j == hit_record.index)
+      if(primitives[j].index == hit_record.index)
       {
         continue;
       }
@@ -82,7 +102,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
       shadow_ray.direction = normalize(light_source - hit_record.p);
       shadow_hit_record.hit = false;
       shadow_hit_record.t = 100000.0;
-      ray_sphere_intersection(primitives[j] , shadow_ray, &shadow_hit_record, j);
+      ray_sphere_intersection(primitives[j] , shadow_ray, &shadow_hit_record);
       if(shadow_hit_record.hit)
       {
         c = c + vec3<f32>(0.08) * albedo[1];
@@ -112,7 +132,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     let h = normalize(light_dir + view_dir);
     let distance = length(light_source - hit_record.p);
 
-    let exponent = 150.0f;
+    let exponent = 25.0f;
     let pref_direction = vec3<f32>(0.0, -1.0, 0.0);
     let attuenation = pow((max(dot(normalize(-pref_direction), light_dir), 0.0)), exponent) / (distance * distance);
     let radiance = light_color * attuenation;
@@ -176,7 +196,7 @@ fn ray_at(ray : Ray, t : f32) -> vec3<f32>
 }
 
 /* Primitive intersection */
-fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function, HitRecord>, index : u32)
+fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function, HitRecord>)
 {
   let origin = ray.origin;
   let direction = ray.direction;
@@ -205,7 +225,43 @@ fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function
   (*hit_record).normal = normalize((*hit_record).p - center);
   (*hit_record).t = t;
   (*hit_record).hit = true;
-  (*hit_record).index = index;
+  (*hit_record).index = sphere.index;
+}
+
+fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, hit_record : ptr<function, HitRecord>)
+{
+  let origin = ray.origin;
+  let direction = ray.direction;
+  let edge1 = planar_patch.edge1;
+  let edge2 = planar_patch.edge2;
+  let normal = cross(normalize(edge2), normalize(edge1));
+  let origin_to_origin = planar_patch.origin - origin;
+  let ndotd = dot(normal, direction);
+  if(ndotd  < abs(0.0001))
+  {
+    return;
+  }
+
+  let t = dot(normal, origin_to_origin) / ndotd;
+  if(t < 0.0 || t > (*hit_record).t)
+  {
+    return;
+  }
+  let intersection = ray_at(ray, t);
+  let m = intersection - planar_patch.origin;
+  let u = dot(m, edge1) / dot(edge1, edge1);
+  let v = dot(m, edge2) / dot(edge2, edge2);
+
+  if(u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+  {
+    return;
+  }
+
+  (*hit_record).hit = true;
+  (*hit_record).p = intersection;
+  (*hit_record).normal = normalize(normal);
+  (*hit_record).t = t;
+  (*hit_record).index = planar_patch.index;
 }
 
 
