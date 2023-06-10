@@ -3,11 +3,12 @@ import ComputeShaderCode from "./shaders/ComputeShader.wgsl";
 import { vec3, vec4 } from "gl-matrix";
 
 class Renderer {
-  constructor({ device, context, integrator, scene }) {
+  constructor({ device, context, integrator, scene, sample }) {
     this.device = device;
     this.context = context;
     this.integrator = integrator;
     this.scene = scene;
+    this.sample = sample;
   }
 
   render({
@@ -16,8 +17,10 @@ class Renderer {
     computePipeline,
     computePipelineBindGroup,
   }) {
-    const { device, context, integrator, scene } = this;
+    const { device, context, integrator, scene, sample } = this;
     const { queue } = device;
+    let s = 1;
+    queue.writeBuffer(sample, 0, new Uint32Array([1]));
     const frame = () => {
       const texture = context.getCurrentTexture();
       const textureView = texture.createView();
@@ -49,6 +52,9 @@ class Renderer {
       renderPassEncoder.end();
       const commands = commandEncoder.finish();
       queue.submit([commands]);
+      requestAnimationFrame(frame);
+      s = s + 1;
+      queue.writeBuffer(sample, 0, new Uint32Array([s]));
     };
 
     requestAnimationFrame(frame);
@@ -163,7 +169,7 @@ const Main = async () => {
   const scene = {};
 
   const redSphere = {
-    geometry: vec4.fromValues(0.0, 1.2, -3.5, 1.4),
+    geometry: vec4.fromValues(0.0, 0.5, -0.5, 0.8),
   };
 
   const groundSphere = {
@@ -180,6 +186,17 @@ const Main = async () => {
   const objectBuffer = device.createBuffer({
     size: objectData.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
+  const altFramebufferData = new Float32Array(1400 * 700 * 4);
+  const altFramebuffer = device.createBuffer({
+    size: altFramebufferData.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+
+  const sample = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
   const computePipelineBindGroupLayout = device.createBindGroupLayout({
@@ -200,6 +217,20 @@ const Main = async () => {
           type: "read-only-storage",
         },
       },
+      {
+        binding: 2,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "storage",
+        },
+      },
+      {
+        binding: 3,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "uniform",
+        },
+      },
     ],
   });
 
@@ -215,6 +246,20 @@ const Main = async () => {
         resource: {
           buffer: objectBuffer,
           size: objectData.byteLength,
+        },
+      },
+      {
+        binding: 2,
+        resource: {
+          buffer: altFramebuffer,
+          size: altFramebufferData.byteLength,
+        },
+      },
+      {
+        binding: 3,
+        resource: {
+          buffer: sample,
+          size: 4,
         },
       },
     ],
@@ -236,7 +281,7 @@ const Main = async () => {
 
   device.queue.writeBuffer(objectBuffer, 0, objectData);
 
-  const renderer = new Renderer({ device, context, scene });
+  const renderer = new Renderer({ device, context, scene, sample });
   renderer.render({
     renderPipeline,
     renderPipelineBindGroup,
