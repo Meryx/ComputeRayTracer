@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { Main } from './main.js';
+import React, { useEffect } from "react";
+import { Main } from "./main.js";
 
 const App = () => {
   useEffect(() => {
@@ -7,7 +7,7 @@ const App = () => {
   }, []);
   return (
     <>
-      <canvas id="canvas" width={1366} height={768} />
+      <canvas id="canvas" width={1400} height={700} />
     </>
   );
 };
