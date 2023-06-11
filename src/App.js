@@ -7,7 +7,7 @@ const App = () => {
   }, []);
   return (
     <>
-      <canvas id="canvas" width={1400} height={700} />
+      <canvas id="canvas" width={700} height={700} />
     </>
   );
 };

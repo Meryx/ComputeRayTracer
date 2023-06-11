@@ -1,6 +1,7 @@
 import TextureRenderShaderCode from "./shaders/TextureRenderShader.wgsl";
 import ComputeShaderCode from "./shaders/ComputeShader.wgsl";
 import { vec3, vec4 } from "gl-matrix";
+import cornell from "./scenes/cornell";
 
 class Renderer {
   constructor({ device, context, integrator, scene, sample }) {
@@ -39,7 +40,7 @@ class Renderer {
       computePassEncoder.setPipeline(computePipeline);
       computePassEncoder.setBindGroup(0, computePipelineBindGroup);
       computePassEncoder.dispatchWorkgroups(
-        Math.ceil(1400 / 8),
+        Math.ceil(700 / 8),
         Math.ceil(700 / 8),
         1
       );
@@ -81,7 +82,7 @@ const Main = async () => {
 
   const framebufferDescriptor = {
     size: {
-      width: 1400,
+      width: 700,
       height: 700,
     },
     format,
@@ -230,14 +231,11 @@ const Main = async () => {
     index: 6,
   };
 
-  scene.planarPatches = [
-    topPlanarPatch,
-    bluePlanarPatch,
-    rightPlanarPatch,
-    backPlanarPatch,
-    bottomPlanarPatch,
-  ];
-  stride = 48;
+  scene.planarPatches = cornell.objects.patches.map((patch, i) => {
+    return { ...patch, index: i };
+  });
+  console.log(scene.planarPatches);
+  stride = 64;
   const planarPatchesData = new ArrayBuffer(
     scene.planarPatches.length * stride
   );
@@ -254,14 +252,20 @@ const Main = async () => {
       index * stride + 32,
       3
     );
+    const albedoView = new Float32Array(
+      planarPatchesData,
+      index * stride + 48,
+      3
+    );
     const indexView = new Uint32Array(
       planarPatchesData,
-      index * stride + 44,
+      index * stride + 60,
       1
     );
     originView.set(planarPatch.origin);
     edge1View.set(planarPatch.edge1);
     edge2View.set(planarPatch.edge2);
+    albedoView.set(planarPatch.albedo);
     indexView.set([planarPatch.index]);
   });
 
@@ -270,7 +274,7 @@ const Main = async () => {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
-  const altFramebufferData = new Float32Array(1400 * 700 * 4);
+  const altFramebufferData = new Float32Array(700 * 700 * 4);
   const altFramebuffer = device.createBuffer({
     size: altFramebufferData.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
