@@ -170,13 +170,14 @@ const Main = async () => {
   const scene = {};
 
   const redSphere = {
-    geometry: vec4.fromValues(0.0, -3.0, 978, 10),
-    index: 0,
+    geometry: vec4.fromValues(278, 273, 277, 100),
+    albedo: vec3.fromValues(1, 1, 0),
+    index: 5,
   };
 
   const groundSphere = {
     geometry: vec4.fromValues(0.0, -100.5, -1.0, 100.0),
-    index: 1,
+    index: 4,
   };
 
   scene.objects = [redSphere];
@@ -187,49 +188,16 @@ const Main = async () => {
   const objectData = new ArrayBuffer(objects.length * stride);
   objects.forEach((object, index) => {
     const geometryView = new Float32Array(objectData, index * stride, 4);
-    const indexView = new Uint32Array(objectData, index * stride + 16, 1);
+    const albedoView = new Float32Array(objectData, index * stride + 16, 3);
+    const indexView = new Uint32Array(objectData, index * stride + 28, 1);
     geometryView.set(object.geometry);
+    albedoView.set(object.albedo);
     indexView.set([object.index]);
   });
   const objectBuffer = device.createBuffer({
     size: objectData.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
-
-  const bluePlanarPatch = {
-    origin: vec3.fromValues(-800, -1000, 700.0),
-    edge1: vec3.fromValues(0, 0.0, -1200),
-    edge2: vec3.fromValues(0.0, 2200, 0.0),
-    index: 2,
-  };
-
-  const rightPlanarPatch = {
-    origin: vec3.fromValues(800, -1000, 700.0),
-    edge1: vec3.fromValues(0.0, 2200, 0.0),
-    edge2: vec3.fromValues(0, 0.0, -1200),
-    index: 3,
-  };
-
-  const topPlanarPatch = {
-    origin: vec3.fromValues(-1200, 1000, 700.0),
-    edge2: vec3.fromValues(2400, 0.0, 0),
-    edge1: vec3.fromValues(0.0, 0, -1800.0),
-    index: 4,
-  };
-
-  const backPlanarPatch = {
-    origin: vec3.fromValues(-1200, -1000, -500.0),
-    edge2: vec3.fromValues(0.0, 2000, 0),
-    edge1: vec3.fromValues(2400, 0.0, 0),
-    index: 5,
-  };
-
-  const bottomPlanarPatch = {
-    origin: vec3.fromValues(-1200, -1500, 500.0),
-    edge1: vec3.fromValues(2400, 0.0, 0),
-    edge2: vec3.fromValues(0.0, 0, -1800.0),
-    index: 6,
-  };
 
   scene.planarPatches = cornell.objects.patches.map((patch, i) => {
     return { ...patch, index: i };
@@ -285,6 +253,15 @@ const Main = async () => {
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
+  const camera = new Float32Array([...cornell.camera.position, 0, ...cornell.camera.direction, 0,  ...cornell.camera.widthHeight, cornell.camera.focalLength, 0]);
+  const cameraBuffer = device.createBuffer({
+    size: camera.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+
+
+
+
   const computePipelineBindGroupLayout = device.createBindGroupLayout({
     entries: [
       {
@@ -324,6 +301,13 @@ const Main = async () => {
           type: "read-only-storage",
         },
       },
+      {
+        binding: 5,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: 'read-only-storage',
+        }
+      }
     ],
   });
 
@@ -362,6 +346,13 @@ const Main = async () => {
           size: planarPatchesData.byteLength,
         },
       },
+      {
+        binding: 5,
+        resource: {
+          buffer: cameraBuffer,
+          size: camera.byteLength,
+        }
+      }
     ],
   });
 
@@ -381,6 +372,7 @@ const Main = async () => {
 
   device.queue.writeBuffer(objectBuffer, 0, objectData);
   device.queue.writeBuffer(planarPatchesBuffer, 0, planarPatchesData);
+  device.queue.writeBuffer(cameraBuffer, 0, camera.buffer);
 
   const renderer = new Renderer({ device, context, scene, sample });
   renderer.render({

@@ -3,6 +3,7 @@
 @group(0) @binding(2) var<storage, read_write> alt_color_buffer : array<vec3<f32>>;
 @group(0) @binding(3) var<uniform> sample : u32;
 @group(0) @binding(4) var<storage> planar_patches : array<PlanarPatch>;
+@group(0) @binding(5) var<storage> camera : Camera;
 
 
 const PI: f32 = 3.14159265359;
@@ -11,8 +12,15 @@ const metallic: f32 = 0.1;
 
 struct Sphere {
     geometry: vec4<f32>,
+    albedo: vec3<f32>,
     index: u32
 };
+
+struct Camera {
+  origin: vec3<f32>,
+  direction: vec3<f32>,
+  focal_distance_width_height: vec3<f32>
+}
 
 struct PlanarPatch {
   origin: vec3<f32>,
@@ -36,23 +44,15 @@ struct HitRecord {
   albedo: vec3<f32>
 };
 
-var<private> light_source : vec3<f32> = vec3<f32>(0.0, 0.0, 998);
+var<private> light_source : vec3<f32> = vec3<f32>(0.0, 0.0, 0);
 var<private> light_color : vec3<f32> = vec3<f32>(1000000.0, 1000000.0, 1000000.0);
-var<private> light_center : vec3<f32> = vec3<f32>(0.0, 500.0, 998);
-var<private> light_radius : f32 = 100.0;
-var<private> albedo : array<vec3<f32>, 7>;
+var<private> light_center : vec3<f32> = vec3<f32>(278, 554.0, 277);
+var<private> light_radius : f32 = 150.0;
 
 @compute 
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
-  albedo[0] = vec3<f32>(0.7, 0.0, 0.7);
-  albedo[1] = vec3<f32>(0.7, 0.7, 0.0);
-  albedo[2] = vec3<f32>(1.0, 0, 0);
-  albedo[3] = vec3<f32>(0.0, 1.0, 0.0);
-  albedo[4] = vec3<f32>(0.0, 0.0, 1.0);
-  albedo[5] = vec3<f32>(1.0, 1.0, 1.0);
-  albedo[6] = vec3<f32>(0.0, 0.0, 1.0);
 
     let screen_size: vec2<u32> = textureDimensions(framebuffer);
     if(GlobalInvocationID.x >= screen_size.x || GlobalInvocationID.y >= screen_size.y) {
@@ -66,17 +66,17 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     let ambient = vec3<f32>(0.08) * vec3<f32>(1.0);
     var shadow : bool = false;
 
-    let lower_left_corner : vec3<f32> = vec3<f32>(278.0125, 272.9875, -799.965);
-    let horizontal : vec3<f32> = vec3<f32>(-0.025, 0.0, 0.0);
-    let vertical : vec3<f32> = vec3<f32>(0.0, 0.025, 0.0);
+    let lower_left_corner : vec3<f32> = camera.origin + camera.focal_distance_width_height;
+    let horizontal : vec3<f32> = -vec3<f32>(camera.focal_distance_width_height.x * 2, 0, 0);
+    let vertical : vec3<f32> = -vec3<f32>(0, camera.focal_distance_width_height.y * 2, 0);
     let u : f32 = (f32(screen_pos.x) + 0.5) / f32(screen_size.x);
     let v : f32 = (f32(screen_size.y) - f32(screen_pos.y) + 0.5) / f32(screen_size.y);
     var ray : Ray;
-    ray.origin = vec3<f32>(278, 273, -800);
+    ray.origin = camera.origin;
     ray.direction = normalize(lower_left_corner + u * horizontal + v * vertical - ray.origin);
     var hit_record : HitRecord;
     hit_record.hit = false;
-    hit_record.t = 100000.0;
+    hit_record.t = 10000000.0;
     hit_record.index = 100u;
     light_source = sample_surface_circle(light_center, light_radius);
 
@@ -85,78 +85,123 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
       ray_patch_intersection(planar_patches[i], ray, &hit_record);
     }
 
+    for(var i = 0u; i < arrayLength(&primitives); i = i + 1u)
+    {
+      ray_sphere_intersection(primitives[i], ray, &hit_record);
+    }
+
     if(!hit_record.hit)
     {
       textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
       return;
     }
 
-    textureStore(framebuffer, screen_pos, vec4<f32>(hit_record.albedo, 1.0));
+    var shadow_ray : Ray;
+    shadow_ray.origin = hit_record.p;
+    shadow_ray.direction = normalize(light_source - shadow_ray.origin);
+    var shadow_hit_record: HitRecord;
+    shadow_hit_record.hit = false;
+    shadow_hit_record.t = 10000000.0;
+    shadow_hit_record.index = hit_record.index;
+
+    for(var i = 0u; i < arrayLength(&planar_patches); i = i + 1u)
+    {
+      ray_patch_intersection(planar_patches[i], shadow_ray, &shadow_hit_record);
+    }
+
+    for(var i = 0u; i < arrayLength(&primitives); i = i + 1u)
+    {
+      ray_sphere_intersection(primitives[i], shadow_ray, &shadow_hit_record);
+    }
+
+        let albedo = hit_record.albedo;
+
+    if(shadow_hit_record.hit && hit_record.index != 1)
+    {
+      c = c + ambient;
+
+      c = c * albedo;
+
+      let current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
+      let combine = current_color + c;
+      alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x] = combine;
+
+      c = combine;
+      c = c / f32(sample);
+      
+      c = c / (c + vec3<f32>(1.0));
+      c = pow(c, vec3<f32>(1.0 / 2.2));
+      textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
+      return;
+    }
 
 
 
 
-    // let normal : vec3<f32> = hit_record.normal;
-    // let light_dir = normalize(light_source - hit_record.p);
-    // let view_dir = normalize(ray.origin - hit_record.p);
-    // let h = normalize(light_dir + view_dir);
-    // let distance = length(light_source - hit_record.p);
-
-    // let exponent = 25.0f;
-    // let pref_direction = vec3<f32>(0.0, -1.0, 0.0);
-    // let attuenation = pow((max(dot(normalize(-pref_direction), light_dir), 0.0)), exponent) / (distance * distance);
-    // let radiance = light_color * attuenation;
-
-    // //Cook-Torrance BRDF
-
-    // //First distrubtionGGX
-    // let a = roughness * roughness;
-    // let a2 = a * a;
-    // let ndoth = max(dot(normal, h), 0.0);
-    // let ndoth2 = ndoth * ndoth;
-    // let nom = a2;
-    // let denom = (ndoth2 * (a2 - 1.0) + 1.0);
-    // let d = nom / (PI * denom * denom);
-    // let NDF = d;
 
 
-    // //Next Geometry Smith
-    // let ndotv = max(dot(normal, view_dir), 0.0);
-    // let ndotl = max(dot(normal, light_dir), 0.0);
+    let normal : vec3<f32> = hit_record.normal;
+    let light_dir = normalize(light_source - hit_record.p);
+    let view_dir = normalize(ray.origin - hit_record.p);
+    let h = normalize(light_dir + view_dir);
+    let distance = length(light_source - hit_record.p);
+
+    let exponent = 2.0f;
+    let pref_direction = vec3<f32>(0.0, -1.0, 0.0);
+    let attuenation = pow((max(dot(normalize(-pref_direction), light_dir), 0.0)), exponent) / (distance * distance);
+    let radiance = light_color * attuenation;
+
+    //Cook-Torrance BRDF
+
+    //First distrubtionGGX
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let ndoth = max(dot(normal, h), 0.0);
+    let ndoth2 = ndoth * ndoth;
+    let nom = a2;
+    let denom = (ndoth2 * (a2 - 1.0) + 1.0);
+    let d = nom / (PI * denom * denom);
+    let NDF = d;
+
+
+
+    //Next Geometry Smith
+    let ndotv = max(dot(normal, view_dir), 0.0);
+    let ndotl = max(dot(normal, light_dir), 0.0);
     
-    // let r = roughness + 1.0;
-    // let k = (r * r) / 8.0;
-    // let ggx2 = ndotv / (ndotv * (1.0 - k) + k);
-    // let ggx1 = ndotl / (ndotl * (1.0 - k) + k);
-    // let G = ggx1 * ggx2;
+    let r = roughness + 1.0;
+    let k = (r * r) / 8.0;
+    let ggx2 = ndotv / (ndotv * (1.0 - k) + k);
+    let ggx1 = ndotl / (ndotl * (1.0 - k) + k);
+    let G = ggx1 * ggx2;
 
-    // let F0 = mix(vec3<f32>(0.04), albedo[hit_record.index], metallic);
-    // let F = F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - dot(h, view_dir), 0.0, 1.0), 5.0);
+    let F0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let F = F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - dot(h, view_dir), 0.0, 1.0), 5.0);
 
-    // let numerator = NDF * G * F;
-    // let denominator = 4.0 * max(ndotv, 0.0) * max(ndotl, 0.0) + 0.0001;
+    let numerator = NDF * G * F;
+    let denominator = 4.0 * max(ndotv, 0.0) * max(ndotl, 0.0) + 0.0001;
 
-    // let specular = numerator / denominator;
-    // let kS = F;
-    // var kD = vec3<f32>(1.0) - kS;
-    // kD = kD * (1.0 - metallic);
+    let specular = numerator / denominator;
+    let kS = F;
+    var kD = vec3<f32>(1.0) - kS;
+    kD = kD * (1.0 - metallic);
 
-    // let Lo = ((kD * albedo[hit_record.index] / PI + specular) * radiance * ndotl);
+    let Lo = ((kD * albedo / PI + specular) * radiance * ndotl);
     
-    // c = c + Lo + ambient;
+    c = c + Lo + ambient;
 
-    // c = c * albedo[hit_record.index];
+    c = c * albedo;
 
-    // let current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
-    // let combine = current_color + c;
-    // alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x] = combine;
+    let current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
+    let combine = current_color + c;
+    alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x] = combine;
 
-    // c = combine;
-    // c = c / f32(sample);
+    c = combine;
+    c = c / f32(sample);
     
-    // c = c / (c + vec3<f32>(1.0));
-    // c = pow(c, vec3<f32>(1.0 / 2.2));
-    // textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
+    c = c / (c + vec3<f32>(1.0));
+    c = pow(c, vec3<f32>(1.0 / 2.2));
+    textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
     
 }
 
@@ -168,6 +213,10 @@ fn ray_at(ray : Ray, t : f32) -> vec3<f32>
 /* Primitive intersection */
 fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function, HitRecord>)
 {
+  if((*hit_record).index == sphere.index)
+  {
+    return;
+  }
   let origin = ray.origin;
   let direction = ray.direction;
   let radius = sphere.geometry.w;
@@ -196,28 +245,35 @@ fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function
   (*hit_record).t = t;
   (*hit_record).hit = true;
   (*hit_record).index = sphere.index;
+  (*hit_record).albedo = sphere.albedo;
 }
 
 fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, hit_record : ptr<function, HitRecord>)
 {
+    if((*hit_record).index == planar_patch.index || (planar_patch.index == 1 && (*hit_record).index != 100))
+    {
+      return;
+    }
+
   let origin = ray.origin;
   let direction = ray.direction;
   let edge1 = planar_patch.edge1;
   let edge2 = planar_patch.edge2;
-  var normal = cross(normalize(edge1), normalize(edge2));
+  var normal = normalize(cross(normalize(edge1), normalize(edge2)));
   let origin_to_origin = planar_patch.origin - origin;
   var ndotd = dot(normal, direction);
-  if(ndotd < 0)
+  if(ndotd > 0)
   {
     normal = -normal;
-    ndotd = -ndotd;
   }
-  if(ndotd  < abs(0.0001))
+  ndotd = dot(normal, direction);
+  //ndotd = -ndotd;
+  if(abs(ndotd)  < 0.0001)
   {
     return;
   }
 
-  let t = dot(normal, origin_to_origin) / ndotd;
+  let t = dot(normal, origin_to_origin) / (ndotd);
   if(t < 0.0 || t > (*hit_record).t)
   {
     return;
