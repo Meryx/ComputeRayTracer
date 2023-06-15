@@ -27,6 +27,7 @@ struct PlanarPatch {
   edge1: vec3<f32>,
   edge2: vec3<f32>,
   albedo: vec3<f32>,
+  emission: vec3<f32>,
   index: u32
 };
 
@@ -41,7 +42,9 @@ struct HitRecord {
   t: f32,
   hit: bool,
   index: u32,
-  albedo: vec3<f32>
+  albedo: vec3<f32>,
+  emission: vec3<f32>,
+  last_index: u32,
 };
 
 var<private> light_source : vec3<f32> = vec3<f32>(0.0, 0.0, 0);
@@ -60,139 +63,118 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     }
     let screen_pos : vec2<i32> = vec2<i32>(i32(GlobalInvocationID.x), i32(GlobalInvocationID.y));
 
-    seed = vec4<u32>(u32(screen_pos.x), u32(screen_pos.y * 100), sample, tea(u32(screen_pos.x), u32(screen_pos.y * 100)));
+    // seed = rnd[GlobalInvocationID.x + GlobalInvocationID.y * screen_size.x];
+    seed = vec4<u32>(screen_size.y - u32(screen_pos.y), screen_size.x - u32(screen_pos.x), sample, tea(screen_size.x - u32(screen_pos.x), screen_size.y - u32(screen_pos.y)));
     
-    var c : vec3<f32> = vec3<f32>(0);
+
     let ambient = vec3<f32>(0.08) * vec3<f32>(1.0);
     var shadow : bool = false;
 
     let lower_left_corner : vec3<f32> = camera.origin + camera.focal_distance_width_height;
     let horizontal : vec3<f32> = -vec3<f32>(camera.focal_distance_width_height.x * 2, 0, 0);
     let vertical : vec3<f32> = -vec3<f32>(0, camera.focal_distance_width_height.y * 2, 0);
-    let u : f32 = (f32(screen_pos.x) + 0.5) / f32(screen_size.x);
-    let v : f32 = (f32(screen_size.y) - f32(screen_pos.y) + 0.5) / f32(screen_size.y);
-    var ray : Ray;
-    ray.origin = camera.origin;
-    ray.direction = normalize(lower_left_corner + u * horizontal + v * vertical - ray.origin);
-    var hit_record : HitRecord;
-    hit_record.hit = false;
-    hit_record.t = 10000000.0;
-    hit_record.index = 100u;
-    light_source = sample_surface_circle(light_center, light_radius);
+        var c : vec3<f32> = vec3<f32>(0.0);
+            var color : vec3<f32> = vec3<f32>(0.0);
 
-    for(var i = 0u; i < arrayLength(&planar_patches); i = i + 1u)
+
+
+    for(var s : u32 = 0; s < 4; s = s + 1)
     {
-      ray_patch_intersection(planar_patches[i], ray, &hit_record);
+      let u : f32 = (f32(screen_pos.x) + rand()) / f32(screen_size.x);
+      let v : f32 = (f32(screen_size.y) - f32(screen_pos.y) + rand()) / f32(screen_size.y);
+      var ray : Ray;
+      ray.origin = camera.origin;
+      ray.direction = normalize(lower_left_corner + u * horizontal + v * vertical - ray.origin);
+      var total : vec3<f32> = vec3<f32>(1);
+      var albedo = vec3<f32>(1.0);
+      var hit_record : HitRecord;
+      hit_record.index = 100;
+      hit_record.last_index = 100;
+
+    var attenuation : f32 = 1.0;
+    var distance : f32 = 1.0;
+    var pref_direction : vec3<f32> = vec3<f32>(0.0);
+
+
+    var pdf : f32 = 1;
+    var radiance : vec3<f32> = vec3<f32>(0.0);
+    var throughput : vec3<f32> = vec3<f32>(1.0);
+
+    for(var m : u32 = 0; m < 100; m++)
+    {
+
+
+      hit_record.hit = false;
+      hit_record.t = 100000;
+
+      for(var i : u32 = 0; i < arrayLength(&planar_patches); i = i + 1)
+      {
+        ray_patch_intersection(planar_patches[i], ray, &hit_record);
+      }
+      // for(var i : u32 = 0; i < arrayLength(&primitives); i = i + 1)
+      // {
+      //   //ray_sphere_intersection(primitives[i], ray, &hit_record);
+      // }
+      if(hit_record.hit)
+      {
+
+
+        if(hit_record.index == 2)
+        {
+          let exponent = 40.0;
+          let light_dir = ray.direction;
+          let view_dir = normalize(camera.origin - ray.origin);
+          let h = normalize(light_dir + view_dir);
+          let pref_direction = hit_record.normal;
+          let attn = pow((max(dot(normalize(-pref_direction), light_dir), 0.0)), exponent);
+          c = hit_record.emission;
+          radiance += throughput * hit_record.emission * attn;
+          if(m == 0)
+          {
+            radiance = vec3<f32>(1.0);
+          }
+          break;
+        }
+
+        
+
+        hit_record.last_index = hit_record.index;
+        ray.origin = hit_record.p;
+        let res = cosine_weighted_sample_hemisphere(hit_record.normal);
+        ray.direction = normalize(res.xyz);
+        ray.origin = ray.origin + ray.direction * 0.001;
+        pdf = res.w;
+        albedo = albedo * hit_record.albedo;
+        throughput = throughput * albedo;
+
+
+
+        
+        
+
+      }else{
+        c = vec3<f32>(0.0);
+        break;
+      }
     }
 
-    for(var i = 0u; i < arrayLength(&primitives); i = i + 1u)
-    {
-      ray_sphere_intersection(primitives[i], ray, &hit_record);
-    }
 
-    if(!hit_record.hit)
-    {
-      textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
-      return;
-    }
-
-    var shadow_ray : Ray;
-    shadow_ray.origin = hit_record.p;
-    shadow_ray.direction = normalize(light_source - shadow_ray.origin);
-    var shadow_hit_record: HitRecord;
-    shadow_hit_record.hit = false;
-    shadow_hit_record.t = 10000000.0;
-    shadow_hit_record.index = hit_record.index;
-
-    for(var i = 0u; i < arrayLength(&planar_patches); i = i + 1u)
-    {
-      ray_patch_intersection(planar_patches[i], shadow_ray, &shadow_hit_record);
-    }
-
-    for(var i = 0u; i < arrayLength(&primitives); i = i + 1u)
-    {
-      ray_sphere_intersection(primitives[i], shadow_ray, &shadow_hit_record);
-    }
-
-        let albedo = hit_record.albedo;
-
-    if(shadow_hit_record.hit && hit_record.index != 1)
-    {
-      c = c + ambient;
-
-      c = c * albedo;
-
-      let current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
-      let combine = current_color + c;
-      alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x] = combine;
-
-      c = combine;
-      c = c / f32(sample);
-      
-      c = c / (c + vec3<f32>(1.0));
-      c = pow(c, vec3<f32>(1.0 / 2.2));
-      textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
-      return;
-    }
-
-
-
-
-
-
-    let normal : vec3<f32> = hit_record.normal;
-    let light_dir = normalize(light_source - hit_record.p);
-    let view_dir = normalize(ray.origin - hit_record.p);
-    let h = normalize(light_dir + view_dir);
-    let distance = length(light_source - hit_record.p);
-
-    let exponent = 2.0f;
-    let pref_direction = vec3<f32>(0.0, -1.0, 0.0);
-    let attuenation = pow((max(dot(normalize(-pref_direction), light_dir), 0.0)), exponent) / (distance * distance);
-    let radiance = light_color * attuenation;
-
-    //Cook-Torrance BRDF
-
-    //First distrubtionGGX
-    let a = roughness * roughness;
-    let a2 = a * a;
-    let ndoth = max(dot(normal, h), 0.0);
-    let ndoth2 = ndoth * ndoth;
-    let nom = a2;
-    let denom = (ndoth2 * (a2 - 1.0) + 1.0);
-    let d = nom / (PI * denom * denom);
-    let NDF = d;
-
-
-
-    //Next Geometry Smith
-    let ndotv = max(dot(normal, view_dir), 0.0);
-    let ndotl = max(dot(normal, light_dir), 0.0);
     
-    let r = roughness + 1.0;
-    let k = (r * r) / 8.0;
-    let ggx2 = ndotv / (ndotv * (1.0 - k) + k);
-    let ggx1 = ndotl / (ndotl * (1.0 - k) + k);
-    let G = ggx1 * ggx2;
 
-    let F0 = mix(vec3<f32>(0.04), albedo, metallic);
-    let F = F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - dot(h, view_dir), 0.0, 1.0), 5.0);
-
-    let numerator = NDF * G * F;
-    let denominator = 4.0 * max(ndotv, 0.0) * max(ndotl, 0.0) + 0.0001;
-
-    let specular = numerator / denominator;
-    let kS = F;
-    var kD = vec3<f32>(1.0) - kS;
-    kD = kD * (1.0 - metallic);
-
-    let Lo = ((kD * albedo / PI + specular) * radiance * ndotl);
+    // if(!(attenuation <= 1.0 || attenuation >= 1.0))
+    // {
+    //   attenuation = 1.0;
+    // }
     
-    c = c + Lo + ambient;
+    color += radiance;
+    }
+    //c = c  * (1 / pdf);
 
-    c = c * albedo;
+    color = color / f32(4);
+    c = color;
 
-    let current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
+
+    var current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
     let combine = current_color + c;
     alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x] = combine;
 
@@ -201,6 +183,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     
     c = c / (c + vec3<f32>(1.0));
     c = pow(c, vec3<f32>(1.0 / 2.2));
+    
     textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
     
 }
@@ -213,10 +196,11 @@ fn ray_at(ray : Ray, t : f32) -> vec3<f32>
 /* Primitive intersection */
 fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function, HitRecord>)
 {
-  if((*hit_record).index == sphere.index)
+  if((*hit_record).last_index == sphere.index)
   {
     return;
   }
+
   let origin = ray.origin;
   let direction = ray.direction;
   let radius = sphere.geometry.w;
@@ -250,10 +234,17 @@ fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function
 
 fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, hit_record : ptr<function, HitRecord>)
 {
-    if((*hit_record).index == planar_patch.index || (planar_patch.index == 1 && (*hit_record).index != 100))
-    {
-      return;
-    }
+
+
+  if((*hit_record).last_index == planar_patch.index)
+  {
+    return;
+  }
+
+  if((*hit_record).last_index == 1 && planar_patch.index == 2)
+  {
+    return;
+  }
 
   let origin = ray.origin;
   let direction = ray.direction;
@@ -267,7 +258,6 @@ fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, hit_record : pt
     normal = -normal;
   }
   ndotd = dot(normal, direction);
-  //ndotd = -ndotd;
   if(abs(ndotd)  < 0.0001)
   {
     return;
@@ -294,10 +284,61 @@ fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, hit_record : pt
   (*hit_record).t = t;
   (*hit_record).index = planar_patch.index;
   (*hit_record).albedo = planar_patch.albedo;
+  (*hit_record).emission = planar_patch.emission;
 }
 
 
 /* Sampling */
+
+fn uniformally_sample_hemisphere(normal: vec3<f32>) -> vec3<f32> {
+   let u = rand();
+  let v = rand();
+  let theta = 2.0 * PI * u;
+  let phi = acos(2.0 * v - 1.0);
+  let x = cos(theta) * sin(phi);
+  let y = sin(theta) * sin(phi);
+  let z = cos(phi);
+  var sample = vec3<f32>(x, y, z);
+  if(dot(sample, normal) < 0.0)
+  {
+    sample = -sample;
+  }
+  return sample;
+}
+
+fn cosine_weighted_sample_hemisphere(normal : vec3<f32>) -> vec4<f32> {
+  let u = rand();
+  let v = rand();
+  let r = sqrt(u);
+  let theta = 2.0 * PI * v;
+  let x = r * cos(theta);
+  let y = r * sin(theta);
+  let z = sqrt(max(0.0, 1.0 - u));
+
+  var up : vec3<f32>;
+  if(abs(normal.z) < 0.999)
+  {
+    up = vec3<f32>(0.0, 0.0, 1.0);
+  }
+  else
+  {
+    up = vec3<f32>(1.0, 0.0, 0.0);
+  }
+  let tangent = normalize(cross(up, normal));
+  let bitangent = cross(normal, tangent);
+  let direction = tangent * x + bitangent * y + normal * z;
+  return vec4<f32>(direction, z/PI);
+}
+
+
+fn uniformally_sample_rectangle(rect : PlanarPatch) -> vec3<f32>
+{
+  let u = rand();
+  let v = rand();
+  let point = rect.origin + u * rect.edge1 + v * rect.edge2;
+  return point;
+}
+
 fn sample_circle(radius : f32) -> vec2<f32>
 {
     let r = sqrt(rand()) * radius;
@@ -362,7 +403,7 @@ fn pcg4d()
 fn rand() -> f32
 {
     pcg4d(); 
-    return f32(seed.x) / f32(0xffffffffu);
+    return f32(seed.x & 0x00ffffffu) / f32(0x00ffffffu);
 }
 
 var<private> seed : vec4<u32> = vec4<u32>(0);

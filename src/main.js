@@ -4,12 +4,13 @@ import { vec3, vec4 } from "gl-matrix";
 import cornell from "./scenes/cornell";
 
 class Renderer {
-  constructor({ device, context, integrator, scene, sample }) {
+  constructor({ device, context, integrator, scene, sample, rndBuffer }) {
     this.device = device;
     this.context = context;
     this.integrator = integrator;
     this.scene = scene;
     this.sample = sample;
+    this.rndBuffer = rndBuffer;
   }
 
   render({
@@ -18,7 +19,7 @@ class Renderer {
     computePipeline,
     computePipelineBindGroup,
   }) {
-    const { device, context, integrator, scene, sample } = this;
+    const { device, context, integrator, scene, sample, rndBuffer } = this;
     const { queue } = device;
     let s = 1;
     queue.writeBuffer(sample, 0, new Uint32Array([1]));
@@ -46,16 +47,21 @@ class Renderer {
       );
       computePassEncoder.end();
       const renderPassEncoder =
-        commandEncoder.beginRenderPass(renderPassDescriptor);
+      commandEncoder.beginRenderPass(renderPassDescriptor);
       renderPassEncoder.setPipeline(renderPipeline);
       renderPassEncoder.setBindGroup(0, renderPipelineBindGroup);
       renderPassEncoder.draw(6, 1, 0, 0);
       renderPassEncoder.end();
       const commands = commandEncoder.finish();
       queue.submit([commands]);
-      requestAnimationFrame(frame);
+      queue.onSubmittedWorkDone().then(() => {
+              
       s = s + 1;
-      queue.writeBuffer(sample, 0, new Uint32Array([s]));
+        queue.writeBuffer(sample, 0, new Uint32Array([s]));
+        requestAnimationFrame(frame);
+        if (s % 1000 === 0) console.log(s);
+      })
+
     };
 
     requestAnimationFrame(frame);
@@ -203,7 +209,7 @@ const Main = async () => {
     return { ...patch, index: i };
   });
   console.log(scene.planarPatches);
-  stride = 64;
+  stride = 80;
   const planarPatchesData = new ArrayBuffer(
     scene.planarPatches.length * stride
   );
@@ -225,15 +231,22 @@ const Main = async () => {
       index * stride + 48,
       3
     );
+    const emissionView = new Float32Array(
+      planarPatchesData,
+      index * stride + 64,
+      3
+    )
     const indexView = new Uint32Array(
       planarPatchesData,
-      index * stride + 60,
+      index * stride + 76,
       1
     );
+    console.log(planarPatch.emission)
     originView.set(planarPatch.origin);
     edge1View.set(planarPatch.edge1);
     edge2View.set(planarPatch.edge2);
     albedoView.set(planarPatch.albedo);
+    emissionView.set(planarPatch.emission)
     indexView.set([planarPatch.index]);
   });
 
@@ -258,6 +271,17 @@ const Main = async () => {
     size: camera.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   })
+
+  const rndarr = new Float32Array(2450000 * 4);
+  for (let i = 0; i < rndarr.length; i++) {
+    rndarr[i] = Math.random();
+  }
+
+  const rndBuffer = device.createBuffer({
+    size: rndarr.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
 
 
 
@@ -307,6 +331,13 @@ const Main = async () => {
         buffer: {
           type: 'read-only-storage',
         }
+      },
+      {
+        binding: 6,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: 'read-only-storage',
+        }
       }
     ],
   });
@@ -352,6 +383,13 @@ const Main = async () => {
           buffer: cameraBuffer,
           size: camera.byteLength,
         }
+      },
+      {
+        binding: 6,
+        resource: {
+          buffer: rndBuffer,
+          size: rndarr.byteLength
+        }
       }
     ],
   });
@@ -373,8 +411,9 @@ const Main = async () => {
   device.queue.writeBuffer(objectBuffer, 0, objectData);
   device.queue.writeBuffer(planarPatchesBuffer, 0, planarPatchesData);
   device.queue.writeBuffer(cameraBuffer, 0, camera.buffer);
+  device.queue.writeBuffer(rndBuffer, 0, rndarr.buffer);
 
-  const renderer = new Renderer({ device, context, scene, sample });
+  const renderer = new Renderer({ device, context, scene, sample, rndBuffer });
   renderer.render({
     renderPipeline,
     renderPipelineBindGroup,
