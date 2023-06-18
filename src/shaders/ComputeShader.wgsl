@@ -121,14 +121,23 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
         if(hit_record.index == 2)
         {
-          let exponent = 40.0;
+          let exponent = 16.0;
           let light_dir = ray.direction;
           let view_dir = normalize(camera.origin - ray.origin);
           let h = normalize(light_dir + view_dir);
           let pref_direction = hit_record.normal;
           let attn = pow((max(dot(normalize(-pref_direction), light_dir), 0.0)), exponent);
           c = hit_record.emission;
-          radiance += throughput * hit_record.emission * attn;
+
+                  distance = length(hit_record.p - ray.origin);
+        distance = distance / 150;
+        if(distance < 0.1)
+        {
+          distance = 0.1;
+        }
+
+        attenuation = attenuation * (1/(distance * distance));
+          radiance += throughput * hit_record.emission * 1 * attenuation;
           if(m == 0)
           {
             radiance = vec3<f32>(1.0);
@@ -139,6 +148,14 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         
 
         hit_record.last_index = hit_record.index;
+        distance = length(hit_record.p - ray.origin);
+        distance = distance / 150;
+        if(distance < 1)
+        {
+          distance = 1;
+        }
+
+        attenuation = attenuation * (1/(distance * distance));
         ray.origin = hit_record.p;
         let res = cosine_weighted_sample_hemisphere(hit_record.normal);
         ray.direction = normalize(res.xyz);
@@ -158,18 +175,9 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
       }
     }
 
-
-    
-
-    // if(!(attenuation <= 1.0 || attenuation >= 1.0))
-    // {
-    //   attenuation = 1.0;
-    // }
     
     color += radiance;
     }
-    //c = c  * (1 / pdf);
-
     color = color / f32(4);
     c = color;
 
