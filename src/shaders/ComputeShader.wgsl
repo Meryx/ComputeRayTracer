@@ -11,8 +11,9 @@ const roughness: f32 = 0.4;
 const metallic: f32 = 0.1;
 const MAXDEPTH : u32 = 100;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
-const EMISSION : vec3<f32> = vec3<f32>(5, 5, 5);
+const EMISSION : vec3<f32> = vec3<f32>(2, 2, 2);
 const area : f32 = 100 * 100;
+const grid : u32 = 1;
 
 struct Sphere {
     geometry: vec4<f32>,
@@ -79,11 +80,8 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     let vertical : vec3<f32> = -vec3<f32>(0, camera.focal_distance_width_height.y * 2, 0);
     var color : vec3<f32> = vec3<f32>(0.0);
 
-    for(var s : u32 = 0; s < 4; s++)
-    {
-
-      let u : f32 = (f32(screen_pos.x) + (f32(s) + rand()) / 4.0) / f32(screen_size.x);
-      let v : f32 = (f32(screen_size.y) - f32(screen_pos.y) + (f32(s) + rand()) / 4.0) / f32(screen_size.y);
+      let u : f32 = (f32(screen_pos.x) + (f32(sample % grid) + rand()) / f32(grid)) / f32(screen_size.x);
+      let v : f32 = (f32(screen_size.y) - f32(screen_pos.y) + (f32(sample % grid) + rand()) / f32(grid)) / f32(screen_size.y);
 
       var ray : Ray;
       ray.origin = camera.origin;
@@ -102,6 +100,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         {
           break;
         }
+
 
         let radiance_emitted = shape_intersection.emission;
         if(length(radiance_emitted) > 0)
@@ -134,7 +133,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         let point_on_light = sample_light();
         let is_visible = is_visible(shape_intersection.position, point_on_light);
         let light_dir = normalize(point_on_light - shape_intersection.position);
-        let radiance_light = brdf * is_visible * EMISSION * max(0,(dot(shape_intersection.normal, light_dir)));
+        let radiance_light = is_visible * EMISSION * max(0,(dot(shape_intersection.normal, light_dir)));
         var pdf_l = (1.0 / area) / (abs(dot(light_normal, -light_dir)) / (pow(length(shape_intersection.position - point_on_light), 2)));
 
 
@@ -146,7 +145,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         }
         pdf_b = cos(theta) / PI;
         let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
-        var to_add = brdf * beta *  radiance_light * (weight_l / pdf_l);
+        var to_add = brdf * beta * radiance_light * (weight_l / pdf_l);
 
         if(!(length(to_add) == length(to_add)))
         {
@@ -158,7 +157,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
         let new_direction_with_pdf = cosine_weighted_sample_hemisphere(shape_intersection.normal);
         let new_direction = new_direction_with_pdf.xyz;
-        let pdf = new_direction_with_pdf.w;
+        var pdf = new_direction_with_pdf.w;
         beta *= brdf * abs(dot(shape_intersection.normal, normalize(new_direction))) / pdf;
         pdf_b = pdf;
         prev_intersection = shape_intersection;
@@ -170,11 +169,9 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
       if(!(length(radiance) == length(radiance)))
       {
         radiance = vec3<f32>(0);
-      }else{
-        color += radiance / 4;
       }
 
-    }
+      color = radiance;
 
 
 
