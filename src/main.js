@@ -4,13 +4,22 @@ import { vec3, vec4 } from "gl-matrix";
 import cornell from "./scenes/cornell";
 
 class Renderer {
-  constructor({ device, context, integrator, scene, sample, rndBuffer }) {
+  constructor({
+    device,
+    context,
+    integrator,
+    scene,
+    sample,
+    sample2,
+    rndBuffer,
+  }) {
     this.device = device;
     this.context = context;
     this.integrator = integrator;
     this.scene = scene;
     this.sample = sample;
     this.rndBuffer = rndBuffer;
+    this.sample2 = sample2;
   }
 
   render({
@@ -18,12 +27,22 @@ class Renderer {
     renderPipelineBindGroup,
     computePipeline,
     computePipelineBindGroup,
+    computePipelineBindGroup2,
   }) {
-    const { device, context, integrator, scene, sample, rndBuffer } = this;
+    const { device, context, integrator, scene, sample, sample2, rndBuffer } =
+      this;
     const { queue } = device;
     let s = 1;
-    queue.writeBuffer(sample, 0, new Uint32Array([1]));
+    new Uint32Array(sample.getMappedRange()).set([s]);
+    sample.unmap();
+    new Uint32Array(sample2.getMappedRange()).set([s]);
+    sample2.unmap();
+    const bindGroups = [computePipelineBindGroup, computePipelineBindGroup2];
+    const samples = [sample, sample2];
+
     const frame = () => {
+      s = s + 1;
+      queue.writeBuffer(samples[s % 2], 0, new Uint32Array([s]));
       const texture = context.getCurrentTexture();
       const textureView = texture.createView();
       const renderPassDescriptor = {
@@ -39,7 +58,7 @@ class Renderer {
       const commandEncoder = device.createCommandEncoder();
       const computePassEncoder = commandEncoder.beginComputePass();
       computePassEncoder.setPipeline(computePipeline);
-      computePassEncoder.setBindGroup(0, computePipelineBindGroup);
+      computePassEncoder.setBindGroup(0, bindGroups[(s + 1) % 2]);
       computePassEncoder.dispatchWorkgroups(
         Math.ceil(700 / 8),
         Math.ceil(700 / 8),
@@ -47,21 +66,15 @@ class Renderer {
       );
       computePassEncoder.end();
       const renderPassEncoder =
-      commandEncoder.beginRenderPass(renderPassDescriptor);
+        commandEncoder.beginRenderPass(renderPassDescriptor);
       renderPassEncoder.setPipeline(renderPipeline);
       renderPassEncoder.setBindGroup(0, renderPipelineBindGroup);
       renderPassEncoder.draw(6, 1, 0, 0);
       renderPassEncoder.end();
       const commands = commandEncoder.finish();
       queue.submit([commands]);
-      queue.onSubmittedWorkDone().then(() => {
-              
-      s = s + 1;
-        queue.writeBuffer(sample, 0, new Uint32Array([s]));
-        requestAnimationFrame(frame);
-        if (s % 1000 === 0) console.log(s);
-      })
-
+      requestAnimationFrame(frame);
+      if (s % 1000 === 0) console.log(s);
     };
 
     requestAnimationFrame(frame);
@@ -235,18 +248,18 @@ const Main = async () => {
       planarPatchesData,
       index * stride + 64,
       3
-    )
+    );
     const indexView = new Uint32Array(
       planarPatchesData,
       index * stride + 76,
       1
     );
-    console.log(planarPatch.emission)
+    console.log(planarPatch.emission);
     originView.set(planarPatch.origin);
     edge1View.set(planarPatch.edge1);
     edge2View.set(planarPatch.edge2);
     albedoView.set(planarPatch.albedo);
-    emissionView.set(planarPatch.emission)
+    emissionView.set(planarPatch.emission);
     indexView.set([planarPatch.index]);
   });
 
@@ -264,13 +277,28 @@ const Main = async () => {
   const sample = device.createBuffer({
     size: 4,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    mappedAtCreation: true,
   });
 
-  const camera = new Float32Array([...cornell.camera.position, 0, ...cornell.camera.direction, 0,  ...cornell.camera.widthHeight, cornell.camera.focalLength, 0]);
+  const sample2 = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    mappedAtCreation: true,
+  });
+
+  const camera = new Float32Array([
+    ...cornell.camera.position,
+    0,
+    ...cornell.camera.direction,
+    0,
+    ...cornell.camera.widthHeight,
+    cornell.camera.focalLength,
+    0,
+  ]);
   const cameraBuffer = device.createBuffer({
     size: camera.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  })
+  });
 
   const rndarr = new Float32Array(2450000 * 4);
   for (let i = 0; i < rndarr.length; i++) {
@@ -281,10 +309,6 @@ const Main = async () => {
     size: rndarr.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
-
-
-
-
 
   const computePipelineBindGroupLayout = device.createBindGroupLayout({
     entries: [
@@ -329,16 +353,16 @@ const Main = async () => {
         binding: 5,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: 'read-only-storage',
-        }
+          type: "read-only-storage",
+        },
       },
       {
         binding: 6,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: 'read-only-storage',
-        }
-      }
+          type: "read-only-storage",
+        },
+      },
     ],
   });
 
@@ -382,15 +406,67 @@ const Main = async () => {
         resource: {
           buffer: cameraBuffer,
           size: camera.byteLength,
-        }
+        },
       },
       {
         binding: 6,
         resource: {
           buffer: rndBuffer,
-          size: rndarr.byteLength
-        }
-      }
+          size: rndarr.byteLength,
+        },
+      },
+    ],
+  });
+
+  const computePipelineBindGroup2 = device.createBindGroup({
+    layout: computePipelineBindGroupLayout,
+    entries: [
+      {
+        binding: 0,
+        resource: framebufferView,
+      },
+      {
+        binding: 1,
+        resource: {
+          buffer: objectBuffer,
+          size: objectData.byteLength,
+        },
+      },
+      {
+        binding: 2,
+        resource: {
+          buffer: altFramebuffer,
+          size: altFramebufferData.byteLength,
+        },
+      },
+      {
+        binding: 3,
+        resource: {
+          buffer: sample2,
+          size: 4,
+        },
+      },
+      {
+        binding: 4,
+        resource: {
+          buffer: planarPatchesBuffer,
+          size: planarPatchesData.byteLength,
+        },
+      },
+      {
+        binding: 5,
+        resource: {
+          buffer: cameraBuffer,
+          size: camera.byteLength,
+        },
+      },
+      {
+        binding: 6,
+        resource: {
+          buffer: rndBuffer,
+          size: rndarr.byteLength,
+        },
+      },
     ],
   });
 
@@ -413,12 +489,20 @@ const Main = async () => {
   device.queue.writeBuffer(cameraBuffer, 0, camera.buffer);
   device.queue.writeBuffer(rndBuffer, 0, rndarr.buffer);
 
-  const renderer = new Renderer({ device, context, scene, sample, rndBuffer });
+  const renderer = new Renderer({
+    device,
+    context,
+    scene,
+    sample,
+    sample2,
+    rndBuffer,
+  });
   renderer.render({
     renderPipeline,
     renderPipelineBindGroup,
     computePipeline,
     computePipelineBindGroup,
+    computePipelineBindGroup2,
   });
 };
 

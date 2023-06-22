@@ -11,9 +11,10 @@ const roughness: f32 = 0.4;
 const metallic: f32 = 0.1;
 const MAXDEPTH : u32 = 100;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
-const EMISSION : vec3<f32> = vec3<f32>(2, 2, 2);
+const EMISSION : vec3<f32> = vec3<f32>(20, 20, 20);
 const area : f32 = 100 * 100;
 const grid : u32 = 1;
+
 
 struct Sphere {
     geometry: vec4<f32>,
@@ -72,8 +73,9 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         return;
     }
     let screen_pos : vec2<i32> = vec2<i32>(i32(GlobalInvocationID.x), i32(GlobalInvocationID.y));
-    seed = vec4<u32>(screen_size.y - u32(screen_pos.y), screen_size.x - u32(screen_pos.x), sample, tea(screen_size.x - u32(screen_pos.x), screen_size.y - u32(screen_pos.y)));
+    seed = vec4<u32>(u32(screen_pos.y), u32(screen_pos.x * 100), sample, tea(u32(screen_pos.x), u32(screen_pos.y * 100)));
     let brdf = 1 / PI;
+    var pdf : f32 = 1.0;
 
     let lower_left_corner : vec3<f32> = camera.origin + camera.focal_distance_width_height;
     let horizontal : vec3<f32> = -vec3<f32>(camera.focal_distance_width_height.x * 2, 0, 0);
@@ -91,15 +93,18 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
       var radiance : vec3<f32> = vec3<f32>(0.0);
       var beta : vec3<f32> = vec3<f32>(1.0);
       var pdf_b : f32 = 1.0;
+      var exclude : u32 = 100;
       var prev_intersection : ShapeIntersection;
       while(true)
       {
+        
 
-        let shape_intersection : ShapeIntersection = intersect(ray);
+        let shape_intersection : ShapeIntersection = intersect(ray, exclude);
         if(!shape_intersection.hit)
         {
           break;
         }
+        exclude = shape_intersection.index;
 
 
         let radiance_emitted = shape_intersection.emission;
@@ -110,12 +115,11 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
             radiance += beta * EMISSION;
           } else {
             let pdf_l = (1.0 / area) / (abs(dot(shape_intersection.normal, -ray.direction)) / pow(length(prev_intersection.position - shape_intersection.position), 2));
+
             let weight_b = power_heuristic(1, pdf_b, 1, pdf_l);
             var to_add = beta * weight_b * EMISSION;
-            if(!(length(to_add) == length(to_add)))
-            {
-              to_add = vec3<f32>(0,0,0);
-            }
+
+
             radiance += to_add;
           }
           break;
@@ -128,37 +132,47 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
         let light_normal = vec3<f32>(0,-1,0);
         beta *= shape_intersection.albedo;
+        
 
 
         let point_on_light = sample_light();
-        let is_visible = is_visible(shape_intersection.position, point_on_light);
+        let is_visible = is_visible(shape_intersection.position, point_on_light, exclude);
+
         let light_dir = normalize(point_on_light - shape_intersection.position);
+
         let radiance_light = is_visible * EMISSION * max(0,(dot(shape_intersection.normal, light_dir)));
-        var pdf_l = (1.0 / area) / (abs(dot(light_normal, -light_dir)) / (pow(length(shape_intersection.position - point_on_light), 2)));
+
+        let costheta_l = abs(dot(light_normal, -light_dir));
+        let len = length(point_on_light - shape_intersection.position);
+        
+        var pdf_l = (1.0 / area) / (costheta_l / (pow(len, 2)));
 
 
+        var costheta = abs(dot(shape_intersection.normal, light_dir));
 
-        var theta = abs(dot(shape_intersection.normal, light_dir));
-        if(theta <= 0.0001)
-        {
-          theta = 0;
-        }
-        pdf_b = cos(theta) / PI;
+        pdf_b = costheta / PI;
         let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
-        var to_add = brdf * beta * radiance_light * (weight_l / pdf_l);
-
-        if(!(length(to_add) == length(to_add)))
+        
+        var to_add = brdf * radiance_light * weight_l * beta / pdf_l;
+        if(is_visible == 0.0)
         {
           to_add = vec3<f32>(0);
         }
+
+
+
 
 
         radiance += to_add;
 
         let new_direction_with_pdf = cosine_weighted_sample_hemisphere(shape_intersection.normal);
         let new_direction = new_direction_with_pdf.xyz;
-        var pdf = new_direction_with_pdf.w;
-        beta *= brdf * abs(dot(shape_intersection.normal, normalize(new_direction))) / pdf;
+        pdf = new_direction_with_pdf.w;
+
+        let cosnew = abs(dot(shape_intersection.normal, normalize(new_direction)));
+
+        beta *= brdf * cosnew / pdf;
+
         pdf_b = pdf;
         prev_intersection = shape_intersection;
 
@@ -166,48 +180,34 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
         ray.direction = normalize(new_direction);
         depth++;
       }
-      if(!(length(radiance) == length(radiance)))
-      {
-        radiance = vec3<f32>(0);
-      }
-
-      color = radiance;
-
-
-
-    if(!(length(color) == length(color)))
-    {
-      color = vec3<f32>(1);
-    }
 
 
 
 
-    var c = color;
+    var c = radiance;
     var current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
     let combine = current_color + c;
     alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x] = combine;
     c = combine;
+
     c = c / f32(sample);
     c = c / (c + vec3<f32>(1.0));
     c = pow(c, vec3<f32>(1.0 / 2.2));
-    if(!(length(c) == length(c)))
-    {
-      return;
-    }
+
+
     textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
     
 }
 
-fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>) -> f32
+fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>, exclude : u32) -> f32
 {
   var ray : Ray;
   ray.origin = p0;
   ray.direction = normalize(p1 - p0);
-  let shape_intersection : ShapeIntersection = intersect(ray);
+  let shape_intersection : ShapeIntersection = intersect(ray, exclude);
   if(shape_intersection.hit)
   {
-    if(length(shape_intersection.position - p1) < 0.001 && shape_intersection.index == 2)
+    if(length(shape_intersection.position - p1) < 0.001)
     {
       return 1.0;
     }
@@ -231,7 +231,7 @@ fn power_heuristic(nf : f32, f_pdf : f32, ng : f32, g_pdf : f32) -> f32
   return (f * f) / (f * f + g * g);
 }
 
-fn intersect(ray : Ray) -> ShapeIntersection
+fn intersect(ray : Ray, exclude : u32) -> ShapeIntersection
 {
   var shape_intersection : ShapeIntersection;
   shape_intersection.hit = false;
@@ -239,7 +239,7 @@ fn intersect(ray : Ray) -> ShapeIntersection
 
   for(var i : u32; i < arrayLength(&planar_patches); i++)
   {
-    let temp_si = ray_patch_intersection_test(planar_patches[i], ray, 0.001, t_max);
+    let temp_si = ray_patch_intersection_test(planar_patches[i], ray, 0.001, t_max, exclude);
     if(temp_si.hit)
     {
       shape_intersection = temp_si;
@@ -294,11 +294,16 @@ fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function
   (*hit_record).albedo = sphere.albedo;
 }
 
-fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f32, t_max : f32) -> ShapeIntersection
+fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f32, t_max : f32, exclude : u32) -> ShapeIntersection
 {
 
   var shape_intersection : ShapeIntersection;
   shape_intersection.hit = false;
+
+  if(exclude == planar_patch.index)
+  {
+    return shape_intersection;
+  }
 
 
   let origin = ray.origin;
@@ -505,7 +510,7 @@ fn pcg4d()
 fn rand() -> f32
 {
     pcg4d(); 
-    return f32(seed.x & 0x00ffffffu) / f32(0x00ffffffu);
+    return f32(seed.x & 0x00ffffffu) / f32(0x01000000);
 }
 
 var<private> seed : vec4<u32> = vec4<u32>(0);
