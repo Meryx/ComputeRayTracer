@@ -1,5 +1,5 @@
 @group(0) @binding(0) var framebuffer: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(1) var<storage> primitives : array<Sphere>;
+@group(0) @binding(1) var<storage> spheres : array<Sphere>;
 @group(0) @binding(2) var<storage, read_write> alt_color_buffer : array<vec3<f32>>;
 @group(0) @binding(3) var<uniform> sample : u32;
 @group(0) @binding(4) var<storage> planar_patches : array<PlanarPatch>;
@@ -7,26 +7,28 @@
 
 
 const PI: f32 = 3.14159265359;
-const roughness: f32 = 0.4;
-const metallic: f32 = 0.1;
-const MAXDEPTH : u32 = 100;
+const MAXDEPTH : u32 = 100000000;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
-const EMISSION : vec3<f32> = vec3<f32>(20, 20, 20);
-const area : f32 = 100 * 100;
-const grid : u32 = 1;
+const GRID_SIZE : u32 = 16;
+const BRDF : f32 = 1.0 / PI;
 
 
 struct Sphere {
-    geometry: vec4<f32>,
-    albedo: vec3<f32>,
-    index: u32
+  center: vec3<f32>,
+  radius: f32,
+  albedo: vec3<f32>,
+  index: u32,
+  emission: vec3<f32>
 };
 
 struct Camera {
-  origin: vec3<f32>,
-  direction: vec3<f32>,
-  focal_distance_width_height: vec3<f32>
-}
+  eye: vec3<f32>,
+  lookat: vec3<f32>,
+  up: vec3<f32>,
+  viewport_width: f32,
+  viewport_height: f32,
+  focal_length: f32
+};
 
 struct PlanarPatch {
   origin: vec3<f32>,
@@ -38,8 +40,8 @@ struct PlanarPatch {
 };
 
 struct Ray {
-    origin: vec3<f32>,
-    direction: vec3<f32>
+  origin: vec3<f32>,
+  direction: vec3<f32>
 };
 
 struct HitRecord {
@@ -64,138 +66,171 @@ struct ShapeIntersection {
   last_index: u32,
 };
 
+fn camera_basis() -> mat3x3<f32> {
+  let w : vec3<f32> = normalize(camera.eye - camera.lookat);
+  let u : vec3<f32> = normalize(cross(camera.up, w));
+  let v : vec3<f32> = cross(w, u);
+  return mat3x3<f32>(u, v, w);
+}
+
+fn camera_ray(screen_pos : vec2<u32>, screen_size : vec2<u32>) -> Ray {
+  let aspect_ratio : f32 = camera.viewport_width / camera.viewport_height;
+  let viewport_height : f32 = 2.0 * tan(camera.focal_length / 2.0);
+  let viewport_width : f32 = aspect_ratio * viewport_height;
+  let basis = camera_basis();
+  let u : vec3<f32> = basis[0];
+  let v : vec3<f32> = basis[1];
+  let w : vec3<f32> = basis[2];
+  let horizontal : vec3<f32> = viewport_width * u;
+  let vertical : vec3<f32> = viewport_height * v;
+  let lower_left_corner : vec3<f32> = camera.eye - horizontal / 2.0 - vertical / 2.0 - w;
+
+  let camera_film_parameters : vec2<f32> = camera_film_parameters(screen_pos, screen_size);
+  let s = camera_film_parameters.x;
+  let t = camera_film_parameters.y;
+
+  return Ray(camera.eye, normalize(lower_left_corner + s * horizontal + t * vertical - camera.eye));
+}
+
+fn camera_film_parameters(screen_pos : vec2<u32>, screen_size : vec2<u32>) -> vec2<f32> {
+  let s : f32 = (f32(screen_pos.x) + (f32(sample % GRID_SIZE) + rand()) / f32(GRID_SIZE)) / f32(screen_size.x);
+  let t : f32 = (f32(screen_size.y) - f32(screen_pos.y) + (f32(sample % GRID_SIZE) + rand()) / f32(GRID_SIZE)) / f32(screen_size.y);
+  return vec2<f32>(s,t);
+}
+
+fn path_trace(input_ray : Ray) -> vec3<f32>
+{
+  var ray : Ray = input_ray;
+  var depth : u32 = 0;
+  var radiance : vec3<f32> = vec3<f32>(0.0);
+  var beta : vec3<f32> = vec3<f32>(1.0);
+  var pdf_b : f32 = 1.0;
+  var exclude : u32 = 100;
+  var prev_intersection : ShapeIntersection;
+
+  while(true)
+  {
+    let shape_intersection : ShapeIntersection = intersect(ray, exclude);
+    if(!shape_intersection.hit)
+    {
+      break;
+    }
+    exclude = shape_intersection.index;
+
+
+    let le = shape_intersection.emission;
+    if(length(le) > 0)
+    {
+      if(depth == 0)
+      {
+        radiance += beta * le;
+      } else {
+        let light = planar_patches[shape_intersection.index];
+        let area = length(light.edge1) * length(light.edge2);
+        let abs_cos_theta_l = abs(dot(shape_intersection.normal, -ray.direction));
+        let distance = length(prev_intersection.position - shape_intersection.position);
+        let distance_squared = pow(distance, 2);
+        let pdf_l_area = 1.0 / area;
+        let geometric_term = abs_cos_theta_l / distance_squared;
+        let pdf_l = pdf_l_area / geometric_term;
+        let weight_b = power_heuristic(1, pdf_b, 1, pdf_l);
+        radiance += weight_b * le * beta;
+      }
+      break;
+    }
+
+    if(depth >= MAXDEPTH)
+    {
+      break;
+    }
+
+    beta *= shape_intersection.albedo;
+
+    let light = planar_patches[2];
+    var normal = normalize(cross((light.edge1), (light.edge2)));
+    let ndotd = dot(normal, ray.direction);
+    if(ndotd > 0)
+    {
+      normal = -normal;
+    }
+    let light_normal = normal;
+    let area = length(light.edge1) * length(light.edge2);
+    let point_on_light = sample_light();
+    let is_visible = is_visible(shape_intersection.position, point_on_light, exclude);
+    let light_dir = normalize(point_on_light - shape_intersection.position);
+    let cos_theta_i = max(0, dot(shape_intersection.normal, light_dir));
+
+    let radiance_light = light.emission * cos_theta_i;
+
+    let abs_cos_theta_l = max(0.000001, abs(dot(light_normal, -light_dir)));
+    let distance = length(point_on_light - shape_intersection.position);
+    let distance_squared = pow(distance, 2);
+    let pdf_l_area = 1.0 / area;
+    let geometric_term = abs_cos_theta_l / distance_squared;
+    
+    let pdf_l = pdf_l_area / geometric_term;
+
+    pdf_b = cos_theta_i / PI;
+    let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
+    
+    radiance += BRDF * (is_visible * radiance_light) * weight_l * beta / pdf_l;
+
+    let new_direction_with_pdf = cosine_weighted_sample_hemisphere(shape_intersection.normal);
+    let new_direction = new_direction_with_pdf.xyz;
+    pdf_b = new_direction_with_pdf.w;
+
+    let cosnew = abs(dot(shape_intersection.normal, new_direction));
+
+    beta *= BRDF * cosnew / pdf_b;
+
+    let max_beta_component = max(beta.x, max(beta.y, beta.z));
+    if(depth > 1 && max_beta_component < 1)
+    {
+      let q = max(0, 1 - max_beta_component);
+      if(rand() < q)
+      {
+        break;
+      }
+      beta /= 1 - q;
+    }
+
+    prev_intersection = shape_intersection;
+
+    ray.origin = shape_intersection.position;
+    ray.direction = new_direction;
+    depth++;
+  }
+  return radiance;
+}
+
 @compute 
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
-    let screen_size: vec2<u32> = textureDimensions(framebuffer);
+    /* Intialize screen size and position. Return if outside bounds of framebuffer. */
+    let screen_size: vec2<u32> = vec2<u32>(u32(camera.viewport_width), u32(camera.viewport_height));
+    let screen_pos : vec2<u32> = vec2<u32>(u32(GlobalInvocationID.x), u32(GlobalInvocationID.y));
     if(GlobalInvocationID.x >= screen_size.x || GlobalInvocationID.y >= screen_size.y) {
         return;
     }
-    let screen_pos : vec2<i32> = vec2<i32>(i32(GlobalInvocationID.x), i32(GlobalInvocationID.y));
-    seed = vec4<u32>(u32(screen_pos.y), u32(screen_pos.x * 100), sample, tea(u32(screen_pos.x), u32(screen_pos.y * 100)));
-    let brdf = 1 / PI;
-    var pdf : f32 = 1.0;
 
-    let lower_left_corner : vec3<f32> = camera.origin + camera.focal_distance_width_height;
-    let horizontal : vec3<f32> = -vec3<f32>(camera.focal_distance_width_height.x * 2, 0, 0);
-    let vertical : vec3<f32> = -vec3<f32>(0, camera.focal_distance_width_height.y * 2, 0);
-    var color : vec3<f32> = vec3<f32>(0.0);
-
-      let u : f32 = (f32(screen_pos.x) + (f32(sample % grid) + rand()) / f32(grid)) / f32(screen_size.x);
-      let v : f32 = (f32(screen_size.y) - f32(screen_pos.y) + (f32(sample % grid) + rand()) / f32(grid)) / f32(screen_size.y);
-
-      var ray : Ray;
-      ray.origin = camera.origin;
-      ray.direction = normalize(lower_left_corner + u * horizontal + v * vertical - ray.origin);
-
-      var depth : u32 = 0;
-      var radiance : vec3<f32> = vec3<f32>(0.0);
-      var beta : vec3<f32> = vec3<f32>(1.0);
-      var pdf_b : f32 = 1.0;
-      var exclude : u32 = 100;
-      var prev_intersection : ShapeIntersection;
-      while(true)
-      {
-        
-
-        let shape_intersection : ShapeIntersection = intersect(ray, exclude);
-        if(!shape_intersection.hit)
-        {
-          break;
-        }
-        exclude = shape_intersection.index;
-
-
-        let radiance_emitted = shape_intersection.emission;
-        if(length(radiance_emitted) > 0)
-        {
-          if(depth == 0)
-          {
-            radiance += beta * EMISSION;
-          } else {
-            let pdf_l = (1.0 / area) / (abs(dot(shape_intersection.normal, -ray.direction)) / pow(length(prev_intersection.position - shape_intersection.position), 2));
-
-            let weight_b = power_heuristic(1, pdf_b, 1, pdf_l);
-            var to_add = beta * weight_b * EMISSION;
-
-
-            radiance += to_add;
-          }
-          break;
-        }
-
-        if(depth >= MAXDEPTH)
-        {
-          break;
-        }
-
-        let light_normal = vec3<f32>(0,-1,0);
-        beta *= shape_intersection.albedo;
-        
-
-
-        let point_on_light = sample_light();
-        let is_visible = is_visible(shape_intersection.position, point_on_light, exclude);
-
-        let light_dir = normalize(point_on_light - shape_intersection.position);
-
-        let radiance_light = is_visible * EMISSION * max(0,(dot(shape_intersection.normal, light_dir)));
-
-        let costheta_l = abs(dot(light_normal, -light_dir));
-        let len = length(point_on_light - shape_intersection.position);
-        
-        var pdf_l = (1.0 / area) / (costheta_l / (pow(len, 2)));
-
-
-        var costheta = abs(dot(shape_intersection.normal, light_dir));
-
-        pdf_b = costheta / PI;
-        let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
-        
-        var to_add = brdf * radiance_light * weight_l * beta / pdf_l;
-        if(is_visible == 0.0)
-        {
-          to_add = vec3<f32>(0);
-        }
+    /* Initialize random seed. Multiply x by 100 and y by 100 to ensure unique values between every pixel */
+    seed = vec4<u32>(screen_pos.y, screen_pos.x * 100, sample, tea(screen_pos.x, screen_pos.y * 100));
 
 
 
+    var ray : Ray = camera_ray(screen_pos, screen_size);
+    var radiance : vec3<f32> = path_trace(ray);
+    
+    let pixel_index = screen_pos.x + screen_pos.y * screen_size.x;
+    alt_color_buffer[pixel_index] += radiance;
 
+    radiance = alt_color_buffer[pixel_index];
+    radiance = radiance / f32(sample);
+    radiance = radiance / (radiance + vec3<f32>(1.0));
+    radiance = pow(radiance, vec3<f32>(1.0 / 2.2));
 
-        radiance += to_add;
-
-        let new_direction_with_pdf = cosine_weighted_sample_hemisphere(shape_intersection.normal);
-        let new_direction = new_direction_with_pdf.xyz;
-        pdf = new_direction_with_pdf.w;
-
-        let cosnew = abs(dot(shape_intersection.normal, normalize(new_direction)));
-
-        beta *= brdf * cosnew / pdf;
-
-        pdf_b = pdf;
-        prev_intersection = shape_intersection;
-
-        ray.origin = shape_intersection.position;
-        ray.direction = normalize(new_direction);
-        depth++;
-      }
-
-
-
-
-    var c = radiance;
-    var current_color = alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x];
-    let combine = current_color + c;
-    alt_color_buffer[u32(screen_pos.x) + u32(screen_pos.y) * screen_size.x] = combine;
-    c = combine;
-
-    c = c / f32(sample);
-    c = c / (c + vec3<f32>(1.0));
-    c = pow(c, vec3<f32>(1.0 / 2.2));
-
-
-    textureStore(framebuffer, screen_pos, vec4<f32>(c, 1.0));
+    textureStore(framebuffer, screen_pos, vec4<f32>(radiance, 1.0));
     
 }
 
@@ -207,7 +242,7 @@ fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>, exclude : u32) -> f32
   let shape_intersection : ShapeIntersection = intersect(ray, exclude);
   if(shape_intersection.hit)
   {
-    if(length(shape_intersection.position - p1) < 0.001)
+    if(length(shape_intersection.position - p1) < 0.0001)
     {
       return 1.0;
     }
@@ -235,11 +270,21 @@ fn intersect(ray : Ray, exclude : u32) -> ShapeIntersection
 {
   var shape_intersection : ShapeIntersection;
   shape_intersection.hit = false;
-  var t_max : f32 = INFINITY;
 
+  var t_max : f32 = INFINITY;
   for(var i : u32; i < arrayLength(&planar_patches); i++)
   {
     let temp_si = ray_patch_intersection_test(planar_patches[i], ray, 0.001, t_max, exclude);
+    if(temp_si.hit)
+    {
+      shape_intersection = temp_si;
+      t_max = temp_si.t;
+    }
+    
+  }
+  for(var i : u32; i < arrayLength(&spheres); i++)
+  {
+    let temp_si = ray_sphere_intersection(spheres[i], ray, 0.001, t_max, exclude);
     if(temp_si.hit)
     {
       shape_intersection = temp_si;
@@ -255,18 +300,20 @@ fn ray_at(ray : Ray, t : f32) -> vec3<f32>
   return ray.origin + t * ray.direction;
 }
 
-/* Primitive intersection */
-fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function, HitRecord>)
+fn ray_sphere_intersection(sphere : Sphere, ray : Ray, t_min : f32, t_max : f32, exclude : u32) -> ShapeIntersection
 {
-  if((*hit_record).last_index == sphere.index)
+  var shape_intersection : ShapeIntersection;
+  shape_intersection.hit = false;
+
+  if(exclude == sphere.index)
   {
-    return;
+    return shape_intersection;
   }
 
   let origin = ray.origin;
   let direction = ray.direction;
-  let radius = sphere.geometry.w;
-  let center = vec3<f32>(sphere.geometry.xyz);
+  let radius = sphere.radius;
+  let center = sphere.center;
   let oc = origin - center;
   let a = dot(direction, direction);
   let b = 2.0 * dot(oc, direction);
@@ -274,24 +321,26 @@ fn ray_sphere_intersection(sphere : Sphere, ray : Ray, hit_record : ptr<function
   let discriminant = b * b - 4.0 * a * c;
 
   if (discriminant < 0.0) {
-    return;
+    return shape_intersection;
   }
 
   var t : f32 = (-b - sqrt(discriminant)) / (2.0 * a);
-  if (t < 0.0 || t > (*hit_record).t) {
+  if (t < t_min || t > t_max) {
     t = (-b + sqrt(discriminant)) / (2.0 * a);
-    if(t < 0.0 || t > (*hit_record).t)
+    if (t < t_min || t > t_max)
     {
-      return;
+      return shape_intersection;
     }
   }
 
-  (*hit_record).p = ray_at(ray, t);
-  (*hit_record).normal = normalize((*hit_record).p - center);
-  (*hit_record).t = t;
-  (*hit_record).hit = true;
-  (*hit_record).index = sphere.index;
-  (*hit_record).albedo = sphere.albedo;
+  shape_intersection.position = ray_at(ray, t);
+  shape_intersection.normal = normalize(shape_intersection.position - center);
+  shape_intersection.t = t;
+  shape_intersection.hit = true;
+  shape_intersection.index = sphere.index;
+  shape_intersection.albedo = sphere.albedo;
+  shape_intersection.emission = sphere.emission;
+  return shape_intersection;
 }
 
 fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f32, t_max : f32, exclude : u32) -> ShapeIntersection
@@ -346,52 +395,6 @@ fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f3
   shape_intersection.albedo = planar_patch.albedo;
   shape_intersection.emission = planar_patch.emission;
   return shape_intersection;
-}
-
-
-fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, hit_record : ptr<function, HitRecord>)
-{
-
-
-  let origin = ray.origin;
-  let direction = ray.direction;
-  let edge1 = planar_patch.edge1;
-  let edge2 = planar_patch.edge2;
-  var normal = normalize(cross(normalize(edge1), normalize(edge2)));
-  let origin_to_origin = planar_patch.origin - origin;
-  var ndotd = dot(normal, direction);
-  if(ndotd > 0)
-  {
-    normal = -normal;
-  }
-  ndotd = dot(normal, direction);
-  if(abs(ndotd)  < 0.0001)
-  {
-    return;
-  }
-
-  let t = dot(normal, origin_to_origin) / (ndotd);
-  if(t < 0.0 || t > (*hit_record).t)
-  {
-    return;
-  }
-  let intersection = ray_at(ray, t);
-  let m = intersection - planar_patch.origin;
-  let u = dot(m, edge1) / dot(edge1, edge1);
-  let v = dot(m, edge2) / dot(edge2, edge2);
-
-  if(u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
-  {
-    return;
-  }
-
-  (*hit_record).hit = true;
-  (*hit_record).p = intersection;
-  (*hit_record).normal = normalize(normal);
-  (*hit_record).t = t;
-  (*hit_record).index = planar_patch.index;
-  (*hit_record).albedo = planar_patch.albedo;
-  (*hit_record).emission = planar_patch.emission;
 }
 
 

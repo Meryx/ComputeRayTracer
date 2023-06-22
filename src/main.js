@@ -1,18 +1,10 @@
-import TextureRenderShaderCode from "./shaders/TextureRenderShader.wgsl";
-import ComputeShaderCode from "./shaders/ComputeShader.wgsl";
-import { vec3, vec4 } from "gl-matrix";
-import cornell from "./scenes/cornell";
+import TextureRenderShaderCode from './shaders/TextureRenderShader.wgsl';
+import ComputeShaderCode from './shaders/ComputeShader.wgsl';
+import { vec3, vec4 } from 'gl-matrix';
+import cornell from './scenes/cornell';
 
 class Renderer {
-  constructor({
-    device,
-    context,
-    integrator,
-    scene,
-    sample,
-    sample2,
-    rndBuffer,
-  }) {
+  constructor({ device, context, integrator, scene, sample, sample2, rndBuffer }) {
     this.device = device;
     this.context = context;
     this.integrator = integrator;
@@ -29,8 +21,7 @@ class Renderer {
     computePipelineBindGroup,
     computePipelineBindGroup2,
   }) {
-    const { device, context, integrator, scene, sample, sample2, rndBuffer } =
-      this;
+    const { device, context, integrator, scene, sample, sample2, rndBuffer } = this;
     const { queue } = device;
     let s = 1;
     new Uint32Array(sample.getMappedRange()).set([s]);
@@ -50,8 +41,8 @@ class Renderer {
           {
             view: textureView,
             clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-            loadOp: "clear",
-            storeOp: "store",
+            loadOp: 'clear',
+            storeOp: 'store',
           },
         ],
       };
@@ -59,14 +50,9 @@ class Renderer {
       const computePassEncoder = commandEncoder.beginComputePass();
       computePassEncoder.setPipeline(computePipeline);
       computePassEncoder.setBindGroup(0, bindGroups[(s + 1) % 2]);
-      computePassEncoder.dispatchWorkgroups(
-        Math.ceil(700 / 8),
-        Math.ceil(700 / 8),
-        1
-      );
+      computePassEncoder.dispatchWorkgroups(Math.ceil(700 / 8), Math.ceil(700 / 8), 1);
       computePassEncoder.end();
-      const renderPassEncoder =
-        commandEncoder.beginRenderPass(renderPassDescriptor);
+      const renderPassEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
       renderPassEncoder.setPipeline(renderPipeline);
       renderPassEncoder.setBindGroup(0, renderPipelineBindGroup);
       renderPassEncoder.draw(6, 1, 0, 0);
@@ -85,15 +71,15 @@ const Main = async () => {
   const adapter = await navigator.gpu.requestAdapter();
   const device = await adapter.requestDevice();
 
-  device.addEventListener("uncapturederror", (event) => {
+  device.addEventListener('uncapturederror', (event) => {
     // Re-surface the error, because adding an event listener may silence console logs.
-    console.error("A WebGPU error was not captured:", event.error);
+    console.error('A WebGPU error was not captured:', event.error);
   });
 
-  const canvas = document.getElementById("canvas");
-  const context = canvas.getContext("webgpu");
+  const canvas = document.getElementById('canvas');
+  const context = canvas.getContext('webgpu');
 
-  const format = "rgba8unorm";
+  const format = 'rgba8unorm';
   context.configure({
     device,
     format,
@@ -105,17 +91,14 @@ const Main = async () => {
       height: 700,
     },
     format,
-    usage:
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.STORAGE_BINDING,
+    usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
   };
 
   const framebuffer = device.createTexture(framebufferDescriptor);
   const framebufferView = framebuffer.createView();
 
   const framebufferSamplerDescriptor = {
-    magFilter: "linear",
+    magFilter: 'linear',
   };
   const framebufferSampler = device.createSampler(framebufferSamplerDescriptor);
   const textureRenderShaderModule = device.createShaderModule({
@@ -124,12 +107,12 @@ const Main = async () => {
 
   const vertexStage = {
     module: textureRenderShaderModule,
-    entryPoint: "vert_main",
+    entryPoint: 'vert_main',
   };
 
   const fragmentStage = {
     module: textureRenderShaderModule,
-    entryPoint: "frag_main",
+    entryPoint: 'frag_main',
     targets: [{ format }],
   };
 
@@ -148,9 +131,7 @@ const Main = async () => {
     ],
   };
 
-  const renderPipelineBingGroupLayout = device.createBindGroupLayout(
-    renderPipelinBindGroupLayoutDescriptor
-  );
+  const renderPipelineBingGroupLayout = device.createBindGroupLayout(renderPipelinBindGroupLayoutDescriptor);
 
   const renderPipelinBindGroupDescriptor = {
     layout: renderPipelineBingGroupLayout,
@@ -166,17 +147,13 @@ const Main = async () => {
     ],
   };
 
-  const renderPipelineBindGroup = device.createBindGroup(
-    renderPipelinBindGroupDescriptor
-  );
+  const renderPipelineBindGroup = device.createBindGroup(renderPipelinBindGroupDescriptor);
 
   const renderPipelineLayoutDescriptor = {
     bindGroupLayouts: [renderPipelineBingGroupLayout],
   };
 
-  const renderPipelineLayout = device.createPipelineLayout(
-    renderPipelineLayoutDescriptor
-  );
+  const renderPipelineLayout = device.createPipelineLayout(renderPipelineLayoutDescriptor);
 
   const renderPipelineDescriptor = {
     layout: renderPipelineLayout,
@@ -221,46 +198,45 @@ const Main = async () => {
   scene.planarPatches = cornell.objects.patches.map((patch, i) => {
     return { ...patch, index: i };
   });
-  console.log(scene.planarPatches);
   stride = 80;
-  const planarPatchesData = new ArrayBuffer(
-    scene.planarPatches.length * stride
-  );
+  const planarPatchesData = new ArrayBuffer(scene.planarPatches.length * stride);
 
   scene.planarPatches.forEach((planarPatch, index) => {
     const originView = new Float32Array(planarPatchesData, index * stride, 3);
-    const edge1View = new Float32Array(
-      planarPatchesData,
-      index * stride + 16,
-      3
-    );
-    const edge2View = new Float32Array(
-      planarPatchesData,
-      index * stride + 32,
-      3
-    );
-    const albedoView = new Float32Array(
-      planarPatchesData,
-      index * stride + 48,
-      3
-    );
-    const emissionView = new Float32Array(
-      planarPatchesData,
-      index * stride + 64,
-      3
-    );
-    const indexView = new Uint32Array(
-      planarPatchesData,
-      index * stride + 76,
-      1
-    );
-    console.log(planarPatch.emission);
+    const edge1View = new Float32Array(planarPatchesData, index * stride + 16, 3);
+    const edge2View = new Float32Array(planarPatchesData, index * stride + 32, 3);
+    const albedoView = new Float32Array(planarPatchesData, index * stride + 48, 3);
+    const emissionView = new Float32Array(planarPatchesData, index * stride + 64, 3);
+    const indexView = new Uint32Array(planarPatchesData, index * stride + 76, 1);
     originView.set(planarPatch.origin);
     edge1View.set(planarPatch.edge1);
     edge2View.set(planarPatch.edge2);
     albedoView.set(planarPatch.albedo);
     emissionView.set(planarPatch.emission);
     indexView.set([planarPatch.index]);
+  });
+
+  scene.spheres = cornell.objects.spheres.map((sphere, i) => {
+    return { ...sphere, index: i + scene.planarPatches.length };
+  });
+  stride = 48;
+  const spheresData = new ArrayBuffer(scene.spheres.length * stride);
+  scene.spheres.forEach((sphere, index) => {
+    const centerView = new Float32Array(spheresData, index * stride, 3);
+    const radiusView = new Float32Array(spheresData, index * stride + 12, 1);
+    const albedoView = new Float32Array(spheresData, index * stride + 16, 3);
+    const indexView = new Uint32Array(spheresData, index * stride + 28, 1);
+    const emissionView = new Float32Array(spheresData, index * stride + 32, 3);
+    centerView.set(sphere.center);
+    radiusView.set([sphere.radius]);
+    albedoView.set(sphere.albedo);
+    indexView.set([sphere.index]);
+    emissionView.set(sphere.emission);
+  });
+
+  const spheresBuffer = device.createBuffer({
+    size: spheresData.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
   const planarPatchesBuffer = device.createBuffer({
@@ -287,12 +263,15 @@ const Main = async () => {
   });
 
   const camera = new Float32Array([
-    ...cornell.camera.position,
+    ...cornell.camera.eye,
     0,
-    ...cornell.camera.direction,
+    ...cornell.camera.lookat,
     0,
-    ...cornell.camera.widthHeight,
+    ...cornell.camera.up,
+    cornell.camera.width,
+    cornell.camera.height,
     cornell.camera.focalLength,
+    0,
     0,
   ]);
   const cameraBuffer = device.createBuffer({
@@ -316,51 +295,51 @@ const Main = async () => {
         binding: 0,
         visibility: GPUShaderStage.COMPUTE,
         storageTexture: {
-          access: "write-only",
+          access: 'write-only',
           format,
-          viewDimension: "2d",
+          viewDimension: '2d',
         },
       },
       {
         binding: 1,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: "read-only-storage",
+          type: 'read-only-storage',
         },
       },
       {
         binding: 2,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: "storage",
+          type: 'storage',
         },
       },
       {
         binding: 3,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: "uniform",
+          type: 'uniform',
         },
       },
       {
         binding: 4,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: "read-only-storage",
+          type: 'read-only-storage',
         },
       },
       {
         binding: 5,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: "read-only-storage",
+          type: 'read-only-storage',
         },
       },
       {
         binding: 6,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: "read-only-storage",
+          type: 'read-only-storage',
         },
       },
     ],
@@ -376,8 +355,8 @@ const Main = async () => {
       {
         binding: 1,
         resource: {
-          buffer: objectBuffer,
-          size: objectData.byteLength,
+          buffer: spheresBuffer,
+          size: spheresBuffer.byteLength,
         },
       },
       {
@@ -428,8 +407,8 @@ const Main = async () => {
       {
         binding: 1,
         resource: {
-          buffer: objectBuffer,
-          size: objectData.byteLength,
+          buffer: spheresBuffer,
+          size: spheresBuffer.byteLength,
         },
       },
       {
@@ -480,11 +459,11 @@ const Main = async () => {
       module: device.createShaderModule({
         code: ComputeShaderCode,
       }),
-      entryPoint: "main",
+      entryPoint: 'main',
     },
   });
 
-  device.queue.writeBuffer(objectBuffer, 0, objectData);
+  device.queue.writeBuffer(spheresBuffer, 0, spheresData);
   device.queue.writeBuffer(planarPatchesBuffer, 0, planarPatchesData);
   device.queue.writeBuffer(cameraBuffer, 0, camera.buffer);
   device.queue.writeBuffer(rndBuffer, 0, rndarr.buffer);
