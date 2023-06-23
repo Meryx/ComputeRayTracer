@@ -11,11 +11,8 @@ const MAXDEPTH : u32 = 1000000000;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
 const GRID_SIZE : u32 = 16;
 const BRDF : f32 = 1.0 / PI;
-const lambda_min : f32 = 360.0;
-const lambda_max : f32 = 830.0;
-const white_spectrum : vec4<f32> = vec4<f32>(0.343, 0.747, 0.740, 0.737);
-const red_spectrum : vec4<f32> = vec4<f32>(0.040, 0.058, 0.287, 0.642);
-const green_spectrum : vec4<f32> = vec4<f32>(0.092, 0.285, 0.160, 0.159);
+const lambda_min : f32 = 400.0;
+const lambda_max : f32 = 700.0;
 const light_spectrum : vec4<f32> = vec4<f32>(0, 8.0, 15.6, 18.4);
 const light_reflectance : f32 = 0.78;
 
@@ -110,11 +107,17 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
 {
   var ray : Ray = input_ray;
   var depth : u32 = 0;
-  var radiance : vec3<f32> = vec3<f32>(0.0);
-  var beta : vec3<f32> = vec3<f32>(1.0);
+  var radiance : vec4<f32> = vec4<f32>(0.0);
+  var beta : vec4<f32> = vec4<f32>(1.0);
   var pdf_b : f32 = 1.0;
   var exclude : u32 = 100;
   var prev_intersection : ShapeIntersection;
+  let sampled_spec : array<vec4<f32>, 2> = sample_light_spectrum();
+  let lambdas = vec4<u32>(u32(sampled_spec[1].x), u32(sampled_spec[1].y), u32(sampled_spec[1].z), u32(sampled_spec[1].w));
+  let spec = sampled_spec[0];
+  let white_spec = sample_piecewise_linear_white(lambdas);
+  let red_spec = sample_piecewise_linear_red(lambdas);
+  let green_spec = sample_piecewise_linear_green(lambdas);
 
   while(true)
   {
@@ -126,12 +129,13 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     exclude = shape_intersection.index;
 
 
-    let le = shape_intersection.emission;
+    var le = shape_intersection.emission;
     if(length(le) > 0)
     {
+      var le2 = spec;
       if(depth == 0)
       {
-        radiance += beta * le;
+        radiance += beta * le2;
       } else {
         let light = planar_patches[shape_intersection.index];
         let area = length(light.edge1) * length(light.edge2);
@@ -142,7 +146,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
         let geometric_term = abs_cos_theta_l / distance_squared;
         let pdf_l = pdf_l_area / geometric_term;
         let weight_b = power_heuristic(1, pdf_b, 1, pdf_l);
-        radiance += weight_b * le * beta;
+        radiance += weight_b * le2 * beta;
       }
       break;
     }
@@ -152,7 +156,22 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
       break;
     }
 
-    beta *= shape_intersection.albedo;
+    if(shape_intersection.albedo.x < 0.748 && shape_intersection.albedo.x > 0.746)
+    {
+      beta *= white_spec;
+    }
+
+    if(shape_intersection.albedo.x == 1)
+    {
+      beta *= red_spec;
+    }
+
+    if(shape_intersection.albedo.x == 2)
+    {
+      beta *= green_spec;
+    }
+
+    //beta *= shape_intersection.albedo;
 
     let light = planar_patches[2];
     var normal = normalize(cross((light.edge1), (light.edge2)));
@@ -168,7 +187,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     let light_dir = normalize(point_on_light - shape_intersection.position);
     let cos_theta_i = max(0, dot(shape_intersection.normal, light_dir));
 
-    let radiance_light = light.emission * cos_theta_i;
+    let radiance_light = spec * cos_theta_i;
 
     let abs_cos_theta_l = max(0.000001, abs(dot(light_normal, -light_dir)));
     let distance = length(point_on_light - shape_intersection.position);
@@ -189,7 +208,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
 
     let cosnew = abs(dot(shape_intersection.normal, new_direction));
 
-    beta *= BRDF * cosnew / pdf_b;
+    beta *= BRDF * cosnew / (pdf_b);
 
     let max_beta_component = max(beta.x, max(beta.y, beta.z));
     if(depth > 1 && max_beta_component < 1)
@@ -208,7 +227,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     ray.direction = new_direction;
     depth++;
   }
-  return radiance;
+  return spectral_to_xyz(radiance, lambdas);
 }
 
 @compute 
@@ -228,19 +247,23 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
 
     var ray : Ray = camera_ray(screen_pos, screen_size);
-    var radiance : vec3<f32> = path_trace(ray);
+    var c : vec3<f32> = path_trace(ray);
     
     let pixel_index = screen_pos.x + screen_pos.y * screen_size.x;
-    alt_color_buffer[pixel_index] += radiance;
 
-    radiance = alt_color_buffer[pixel_index];
-    radiance = radiance / f32(sample);
-    radiance = spectral_to_xyz(radiance);
-    radiance = xyz_to_rgb(radiance);
-    //radiance = radiance / (radiance + vec3<f32>(1.0));
-    //radiance = pow(radiance, vec3<f32>(1.0 / 2.2));
+    var xyzc = c;
+    xyzc = xyz_to_rgb(xyzc);
 
-    textureStore(framebuffer, screen_pos, vec4<f32>(radiance, 1.0));
+    alt_color_buffer[pixel_index] += xyzc;
+    xyzc = alt_color_buffer[pixel_index];
+    xyzc = xyzc / f32(sample);
+
+   
+
+    xyzc = xyzc / (xyzc + vec3<f32>(1.0));
+    xyzc = pow(xyzc, vec3<f32>(1.0 / 2.2));
+
+    textureStore(framebuffer, screen_pos, vec4<f32>(xyzc, 1.0));
     
 }
 
@@ -526,32 +549,36 @@ fn rand() -> f32
     return f32(seed.x & 0x00ffffffu) / f32(0x01000000);
 }
 
-fn spectral_to_xyz(radiance : vec3<f32>) -> vec3<f32>
+fn sample_CIE_X(lambdas : vec4<u32>) -> vec4<f32>
+{
+  return vec4<f32>(CIE_X[lambdas.x + 40], CIE_X[lambdas.y + 40], CIE_X[lambdas.z + 40], CIE_X[lambdas.w + 40]);
+}
+
+fn sample_CIE_Y(lambdas : vec4<u32>) -> vec4<f32>
+{
+  return vec4<f32>(CIE_Y[lambdas.x + 40], CIE_Y[lambdas.y + 40], CIE_Y[lambdas.z + 40], CIE_Y[lambdas.w + 40]);
+}
+
+fn sample_CIE_Z(lambdas : vec4<u32>) -> vec4<f32>
+{
+  return vec4<f32>(CIE_Z[lambdas.x + 40], CIE_Z[lambdas.y + 40], CIE_Z[lambdas.z + 40], CIE_Z[lambdas.w + 40]);
+}
+
+fn spectral_to_xyz(radianc : vec4<f32>, lambdas : vec4<u32>) -> vec3<f32>
 {
     var xyz = vec3<f32>(0.0, 0.0, 0.0);
-    let cie_indices = vec3<f32>(140.0, 240.0, 340.0);
-    for(var i : u32 = 0; i < 2; i++)
-    {
-      for(var j : u32 = 0; j < 10; j++)
-      {
-        let t = f32(j) / 10.0;
-        let r = mix(radiance[i], radiance[i + 1], t);
-        let cie_index = u32(cie_indices[i] + (cie_indices[i + 1] - cie_indices[i]) * t);
-        xyz += vec3<f32>(CIE_X[cie_index], CIE_Y[cie_index], CIE_Z[cie_index]) * r;
-      }
-    }
-    xyz += vec3<f32>(CIE_X[340], CIE_Y[340], CIE_Z[340]) * radiance[2];
-    xyz /= 106.856895;
+    let X_BAR = sample_CIE_X(lambdas);
+    let Y_BAR = sample_CIE_Y(lambdas);
+    let Z_BAR = sample_CIE_Z(lambdas);
+    let integ = 106.856895;
+
+    let radiance = radianc * 300;
+
+    xyz.x = (dot(X_BAR, radiance) /4)/integ;
+    xyz.y = (dot(Y_BAR, radiance) /4)/integ;
+    xyz.z = (dot(Z_BAR, radiance) /4)/integ;
+
     return xyz;
-    // let color_500 : vec3<f32> = vec3<f32>(CIE_X[140], CIE_Y[140], CIE_Z[140]) * radiance.x;
-    // let color_600 : vec3<f32> = vec3<f32>(CIE_X[240], CIE_Y[240], CIE_Z[240]) * radiance.y;
-    // let color_700 : vec3<f32> = vec3<f32>(CIE_X[340], CIE_Y[340], CIE_Z[340]) * radiance.z;
-    // let color_x = (color_500.x + color_600.x + color_700.x) / 1;
-    // let color_y = (color_500.y + color_600.y + color_700.y) / 1;
-    // let color_z = (color_500.z + color_600.z + color_700.z) / 1;
-    // //106.856895
-    // //return vec3<f32>(color_x, color_y, color_z);
-    // return color_500 + color_600 + color_700;
 }
 
 fn xyz_to_rgb(rgb : vec3<f32>) -> vec3<f32>
@@ -561,34 +588,34 @@ fn xyz_to_rgb(rgb : vec3<f32>) -> vec3<f32>
     var b =  0.0556434 * rgb.x + -0.2040259 * rgb.y +  1.0572252 * rgb.z;
 
     var rr = vec3<f32>(r, g, b);
-    rr = rr / (rr + vec3<f32>(1.0));
+    // rr = rr / (rr + vec3<f32>(1.0));
 
-    if(r < 0.0031308)
-    {
-        rr.r = 12.92 * rr.r;
-    }
-    else
-    {
-        rr.r = 1.055 * pow(rr.r, 1.0/2.4) - 0.055;
-    }
+    // if(r < 0.0031308)
+    // {
+    //     rr.r = 12.92 * rr.r;
+    // }
+    // else
+    // {
+    //     rr.r = 1.055 * pow(rr.r, 1.0/2.4) - 0.055;
+    // }
 
-    if(g < 0.0031308)
-    {
-        rr.g = 12.92 * rr.g;
-    }
-    else
-    {
-        rr.g = 1.055 * pow(rr.g, 1.0/2.4) - 0.055;
-    }
+    // if(g < 0.0031308)
+    // {
+    //     rr.g = 12.92 * rr.g;
+    // }
+    // else
+    // {
+    //     rr.g = 1.055 * pow(rr.g, 1.0/2.4) - 0.055;
+    // }
 
-    if(b < 0.0031308)
-    {
-        rr.b = 12.92 * rr.b;
-    }
-    else
-    {
-        rr.b = 1.055 * pow(rr.b, 1.0/2.4) - 0.055;
-    }
+    // if(b < 0.0031308)
+    // {
+    //     rr.b = 12.92 * rr.b;
+    // }
+    // else
+    // {
+    //     rr.b = 1.055 * pow(rr.b, 1.0/2.4) - 0.055;
+    // }
 
     return rr;
 
@@ -888,3 +915,180 @@ const CIE_Z : array<f32, 471>  = array<f32, 471>(0.0006061000,   0.0006808792,  
     0.000000000000, 0.000000000000, 0.000000000000, 0.000000000000, 0.000000000000,
     0.000000000000, 0.000000000000, 0.000000000000, 0.000000000000, 0.000000000000,
     0.000000000000);
+
+
+const white_spectrum : array<f32, 76>  = array<f32, 76>(0.343, 0.445, 0.551, 0.624, 0.665, 0.687, 0.708, 0.723, 0.715, 0.710, 0.745, 0.758, 0.739, 0.767, 0.777, 0.765, 0.751, 0.745, 0.748, 0.729, 0.745, 0.757, 0.753, 0.750, 0.746, 0.747, 0.735, 0.732, 0.739, 0.734, 0.725, 0.721, 0.733, 0.725, 0.732, 0.743, 0.744, 0.748, 0.728, 0.716, 0.733, 0.726, 0.713, 0.740, 0.754, 0.764, 0.752, 0.736, 0.734, 0.741, 0.740, 0.732, 0.745, 0.755, 0.751, 0.744, 0.731, 0.733, 0.744, 0.731, 0.712, 0.708, 0.729, 0.730, 0.727, 0.707, 0.703, 0.729, 0.750, 0.760, 0.751, 0.739, 0.724, 0.730, 0.740, 0.737);
+const green_spectrum : array<f32, 76> = array<f32, 76> (0.092, 0.096, 0.098, 0.097, 0.098, 0.095, 0.095, 0.097, 0.095, 0.094, 0.097, 0.098, 0.096, 0.101, 0.103, 0.104, 0.107, 0.109, 0.112, 0.115, 0.125, 0.140, 0.160, 0.187, 0.229, 0.285, 0.343, 0.390, 0.435, 0.464, 0.472, 0.476, 0.481, 0.462, 0.447, 0.441, 0.426, 0.406, 0.373, 0.347, 0.337, 0.314, 0.285, 0.277, 0.266, 0.250, 0.230, 0.207, 0.186, 0.171, 0.160, 0.148, 0.141, 0.136, 0.130, 0.126, 0.123, 0.121, 0.122, 0.119, 0.114, 0.115, 0.117, 0.117, 0.118, 0.120, 0.122, 0.128, 0.132, 0.139, 0.144, 0.146, 0.150, 0.152, 0.157, 0.159);
+const red_spectrum : array<f32, 76> = array<f32, 76>   (0.040, 0.046, 0.048, 0.053, 0.049, 0.050, 0.053, 0.055, 0.057, 0.056, 0.059, 0.057, 0.061, 0.061, 0.060, 0.062, 0.062, 0.062, 0.061, 0.062, 0.060, 0.059, 0.057, 0.058, 0.058, 0.058, 0.056, 0.055, 0.056, 0.059, 0.057, 0.055, 0.059, 0.059, 0.058, 0.059, 0.061, 0.061, 0.063, 0.063, 0.067, 0.068, 0.072, 0.080, 0.090, 0.099, 0.124, 0.154, 0.192, 0.255, 0.287, 0.349, 0.402, 0.443, 0.487, 0.513, 0.558, 0.584, 0.620, 0.606, 0.609, 0.651, 0.612, 0.610, 0.650, 0.638, 0.627, 0.620, 0.630, 0.628, 0.642, 0.639, 0.657, 0.639, 0.635, 0.642);
+
+fn sample_light_spectrum() -> array<vec4<f32>,2>
+{
+  let u = rand();
+  let lambda : f32 = mix(lambda_min, lambda_max, u); // from 400 to 700
+  var i :  u32 = u32((lambda - lambda_min)); // from 0 to 299
+  var lambdas : vec4<f32> = vec4<f32>(0);
+  lambdas[0] = f32(i);
+  let val : f32 = sample_piecewise_linear_light(i);
+  i = (i + 4) % 300;
+  lambdas[1] = f32(i);
+  let val2 : f32 = sample_piecewise_linear_light(i);
+  i = (i + 4) % 300;
+  lambdas[2] = f32(i);
+  let val3 : f32 = sample_piecewise_linear_light(i);
+  i = (i + 4) % 300;
+  lambdas[3] = f32(i);
+  let val4 : f32 = sample_piecewise_linear_light(i);
+  return array<vec4<f32>,2>(vec4<f32>(val, val2, val3, val4), lambdas);
+}
+
+fn sample_piecewise_linear_white(lambdas: vec4<u32>) -> vec4<f32>
+{
+  var val1 : f32 = 0.0;
+  //lambdas[x] is from 0 to 299
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[0] < i * 4u)
+    {
+      val1 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[0] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  var val2: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[1] < i * 4u)
+    {
+      val2 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[1] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+  var val3: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[2] < i * 4u)
+    {
+      val3 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[2] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+  var val4: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[3] < i * 4u)
+    {
+      val4 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[3] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+  return vec4<f32>(val1, val2, val3, val4);
+}
+
+fn sample_piecewise_linear_red(lambdas : vec4<u32>) -> vec4<f32>
+{
+  var val1 : f32 = 0.0;
+  //lambdas[x] is from 0 to 299
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[0] < i * 4u)
+    {
+      val1 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[0] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  var val2: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[1] < i * 4u)
+    {
+      val2 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[1] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  var val3: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[2] < i * 4u)
+    {
+      val3 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[2] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  var val4: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[3] < i * 4u)
+    {
+      val4 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[3] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  return vec4<f32>(val1, val2, val3, val4);
+}
+
+fn sample_piecewise_linear_green(lambdas : vec4<u32>) -> vec4<f32>
+{
+  var val1 : f32 = 0.0;
+  //lambdas[x] is from 0 to 299
+
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[0] < i * 4u)
+    {
+      val1 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[0] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  var val2: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[1] < i * 4u)
+    {
+      val2 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[1] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  var val3: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[2] < i * 4u)
+    {
+      val3 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[2] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  var val4: f32 = 0.0;
+  for(var i : u32 = 0u; i < 76u; i = i + 1u)
+  {
+    if(lambdas[3] < i * 4u)
+    {
+      val4 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[3] - (i - 1u) * 4u) / 4.0);
+      break;
+    }
+  }
+
+  return vec4<f32>(val1, val2, val3, val4);
+}
+
+fn sample_piecewise_linear_light(lambda_index : u32) -> f32
+{
+  if(lambda_index < 100)
+  {
+    return mix(light_spectrum[0], light_spectrum[1], f32(lambda_index) / 100.0);
+  }
+  else if(lambda_index < 200)
+  {
+    return mix(light_spectrum[1], light_spectrum[2], f32(lambda_index - 100) / 100.0);
+  }
+  else
+  {
+    return mix(light_spectrum[2], light_spectrum[3], f32(lambda_index - 200) / 100.0);
+  }
+}
