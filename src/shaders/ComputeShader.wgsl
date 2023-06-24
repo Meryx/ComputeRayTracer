@@ -227,12 +227,15 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     ray.direction = new_direction;
     depth++;
   }
-  return spectral_to_xyz(radiance, lambdas);
+  var r = spectral_to_xyz(radiance, lambdas);
+  r =  white_balance(r, spec, lambdas);
+  return r;
 }
 
 @compute 
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
+
 
     /* Intialize screen size and position. Return if outside bounds of framebuffer. */
     let screen_size: vec2<u32> = vec2<u32>(u32(camera.viewport_width), u32(camera.viewport_height));
@@ -257,6 +260,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     alt_color_buffer[pixel_index] += xyzc;
     xyzc = alt_color_buffer[pixel_index];
     xyzc = xyzc / f32(sample);
+
     xyzc = xyz_to_rgb(xyzc);
 
 
@@ -267,6 +271,32 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
     textureStore(framebuffer, screen_pos, vec4<f32>(xyzc, 1.0));
     
+}
+
+fn white_balance(xyz : vec3<f32> , source_spec : vec4<f32>, lambdas : vec4<u32>) -> vec3<f32>
+{
+  let M_bradford : mat3x3<f32> = mat3x3<f32>(0.8951,  0.2664, -0.1614,
+        -0.7502,  1.7135,  0.0367,
+         0.0389, -0.0685,  1.0296);
+
+  let M_bradford_inv : mat3x3<f32> = mat3x3<f32>(0.9869929, -0.1470543,  0.1599627,
+        0.4323053,  0.5183603,  0.0492912,
+       -0.0085287,  0.0400428,  0.9684867);
+
+  let source_illuminant_xyz = spectral_to_xyz_m();
+  //let source_illuminant_xyz = vec3<f32>(0.7, 1.1, 0.5);
+  let target_illuminant_xyz = vec3<f32>(0.95047, 1.0, 1.08883);
+  
+  let source_cone = M_bradford * source_illuminant_xyz;
+  let target_cone = M_bradford * target_illuminant_xyz;
+
+  var diag : mat3x3<f32> = mat3x3<f32>(target_cone.x / source_cone.x, 0.0, 0.0,
+                                        0.0, target_cone.y / source_cone.y, 0.0,
+                                        0.0, 0.0, target_cone.z / source_cone.z);
+
+  let color_cone = M_bradford_inv * diag * M_bradford * xyz;
+
+  return color_cone;
 }
 
 fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>, exclude : u32) -> f32
@@ -564,6 +594,36 @@ fn sample_CIE_Y(lambdas : vec4<u32>) -> vec4<f32>
 fn sample_CIE_Z(lambdas : vec4<u32>) -> vec4<f32>
 {
   return vec4<f32>(CIE_Z[lambdas.x + 40], CIE_Z[lambdas.y + 40], CIE_Z[lambdas.z + 40], CIE_Z[lambdas.w + 40]);
+}
+
+fn spectral_to_xyz_m() -> vec3<f32>
+{
+
+
+    var xyz = vec3<f32>(0.0, 0.0, 0.0);
+    let integ = 106.856895;
+
+
+    for(var i : u32 = 0; i < 1000; i++)
+    {
+        let sampled_spec : array<vec4<f32>, 2> = sample_light_spectrum();
+        let lambdas = vec4<u32>(u32(sampled_spec[1].x), u32(sampled_spec[1].y), u32(sampled_spec[1].z), u32(sampled_spec[1].w));
+        let spec = sampled_spec[0];
+        let X_BAR = sample_CIE_X(lambdas);
+        let Y_BAR = sample_CIE_Y(lambdas);
+        let Z_BAR = sample_CIE_Z(lambdas);
+
+
+        let radiance = spec * 300;
+
+        xyz.x += (dot(X_BAR, radiance) /4);
+        xyz.y += (dot(Y_BAR, radiance) /4);
+        xyz.z += (dot(Z_BAR, radiance) /4);
+    }
+    xyz = xyz / integ;
+    xyz = xyz / 1000.0;
+
+    return xyz;
 }
 
 fn spectral_to_xyz(radianc : vec4<f32>, lambdas : vec4<u32>) -> vec3<f32>
