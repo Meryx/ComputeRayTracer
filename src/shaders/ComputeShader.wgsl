@@ -252,16 +252,18 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     let pixel_index = screen_pos.x + screen_pos.y * screen_size.x;
 
     var xyzc = c;
-    xyzc = xyz_to_rgb(xyzc);
+
 
     alt_color_buffer[pixel_index] += xyzc;
     xyzc = alt_color_buffer[pixel_index];
     xyzc = xyzc / f32(sample);
+    xyzc = xyz_to_rgb(xyzc);
+
 
    
 
-    xyzc = xyzc / (xyzc + vec3<f32>(1.0));
-    xyzc = pow(xyzc, vec3<f32>(1.0 / 2.2));
+    //xyzc = xyzc / (xyzc + vec3<f32>(1.0));
+    //xyzc = pow(xyzc, vec3<f32>(1.0 / 2.2));
 
     textureStore(framebuffer, screen_pos, vec4<f32>(xyzc, 1.0));
     
@@ -588,34 +590,35 @@ fn xyz_to_rgb(rgb : vec3<f32>) -> vec3<f32>
     var b =  0.0556434 * rgb.x + -0.2040259 * rgb.y +  1.0572252 * rgb.z;
 
     var rr = vec3<f32>(r, g, b);
-    // rr = rr / (rr + vec3<f32>(1.0));
+    rr = rr * 2.2;
+    //rr = rr / (rr + vec3<f32>(1.0));
 
-    // if(r < 0.0031308)
-    // {
-    //     rr.r = 12.92 * rr.r;
-    // }
-    // else
-    // {
-    //     rr.r = 1.055 * pow(rr.r, 1.0/2.4) - 0.055;
-    // }
+    if(r < 0.0031308)
+    {
+        rr.r = 12.92 * rr.r;
+    }
+    else
+    {
+        rr.r = 1.055 * pow(rr.r, 1.0/2.4) - 0.055;
+    }
 
-    // if(g < 0.0031308)
-    // {
-    //     rr.g = 12.92 * rr.g;
-    // }
-    // else
-    // {
-    //     rr.g = 1.055 * pow(rr.g, 1.0/2.4) - 0.055;
-    // }
+    if(g < 0.0031308)
+    {
+        rr.g = 12.92 * rr.g;
+    }
+    else
+    {
+        rr.g = 1.055 * pow(rr.g, 1.0/2.4) - 0.055;
+    }
 
-    // if(b < 0.0031308)
-    // {
-    //     rr.b = 12.92 * rr.b;
-    // }
-    // else
-    // {
-    //     rr.b = 1.055 * pow(rr.b, 1.0/2.4) - 0.055;
-    // }
+    if(b < 0.0031308)
+    {
+        rr.b = 12.92 * rr.b;
+    }
+    else
+    {
+        rr.b = 1.055 * pow(rr.b, 1.0/2.4) - 0.055;
+    }
 
     return rr;
 
@@ -921,6 +924,20 @@ const white_spectrum : array<f32, 76>  = array<f32, 76>(0.343, 0.445, 0.551, 0.6
 const green_spectrum : array<f32, 76> = array<f32, 76> (0.092, 0.096, 0.098, 0.097, 0.098, 0.095, 0.095, 0.097, 0.095, 0.094, 0.097, 0.098, 0.096, 0.101, 0.103, 0.104, 0.107, 0.109, 0.112, 0.115, 0.125, 0.140, 0.160, 0.187, 0.229, 0.285, 0.343, 0.390, 0.435, 0.464, 0.472, 0.476, 0.481, 0.462, 0.447, 0.441, 0.426, 0.406, 0.373, 0.347, 0.337, 0.314, 0.285, 0.277, 0.266, 0.250, 0.230, 0.207, 0.186, 0.171, 0.160, 0.148, 0.141, 0.136, 0.130, 0.126, 0.123, 0.121, 0.122, 0.119, 0.114, 0.115, 0.117, 0.117, 0.118, 0.120, 0.122, 0.128, 0.132, 0.139, 0.144, 0.146, 0.150, 0.152, 0.157, 0.159);
 const red_spectrum : array<f32, 76> = array<f32, 76>   (0.040, 0.046, 0.048, 0.053, 0.049, 0.050, 0.053, 0.055, 0.057, 0.056, 0.059, 0.057, 0.061, 0.061, 0.060, 0.062, 0.062, 0.062, 0.061, 0.062, 0.060, 0.059, 0.057, 0.058, 0.058, 0.058, 0.056, 0.055, 0.056, 0.059, 0.057, 0.055, 0.059, 0.059, 0.058, 0.059, 0.061, 0.061, 0.063, 0.063, 0.067, 0.068, 0.072, 0.080, 0.090, 0.099, 0.124, 0.154, 0.192, 0.255, 0.287, 0.349, 0.402, 0.443, 0.487, 0.513, 0.558, 0.584, 0.620, 0.606, 0.609, 0.651, 0.612, 0.610, 0.650, 0.638, 0.627, 0.620, 0.630, 0.628, 0.642, 0.639, 0.657, 0.639, 0.635, 0.642);
 
+fn adjust_spec() -> array<f32, 76>
+{
+  let min_factor = 0.6;
+  let max_factor = 1.8;
+  let mid_index : f32 = 38;
+  var adjustec_spec = array<f32, 76>(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+  for(var i : u32 = 0; i < 76; i++)
+  {
+    let factor = min_factor + (max_factor - min_factor) * (1.0 - abs(f32(i) - mid_index) / mid_index);
+    adjustec_spec[i] = factor * green_spectrum[i];
+  }
+  return adjustec_spec;
+}
+
 fn sample_light_spectrum() -> array<vec4<f32>,2>
 {
   let u = rand();
@@ -1034,6 +1051,7 @@ fn sample_piecewise_linear_green(lambdas : vec4<u32>) -> vec4<f32>
 {
   var val1 : f32 = 0.0;
   //lambdas[x] is from 0 to 299
+  //let green_spectrum = adjust_spec();
 
   for(var i : u32 = 0u; i < 76u; i = i + 1u)
   {
