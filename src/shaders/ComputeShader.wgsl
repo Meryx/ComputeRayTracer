@@ -662,8 +662,7 @@ fn xyz_to_rgb(rgb : vec3<f32>) -> vec3<f32>
 
     var rr = vec3<f32>(r, g, b);
     rr = vec3(1.0) - exp(-rr * 3.2);
-    //rr = rr * 2.2;
-    //rr = rr / (rr + vec3<f32>(1.0));
+
 
     if(r < 0.0031308)
     {
