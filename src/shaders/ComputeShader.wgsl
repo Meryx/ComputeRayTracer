@@ -4,8 +4,8 @@
 @group(0) @binding(3) var<uniform> sample : u32;
 @group(0) @binding(4) var<storage> planar_patches : array<PlanarPatch>;
 @group(0) @binding(5) var<storage> camera : Camera;
-@group(0) @binding(6) var<storage> CIE : CIE_CURVES;
-
+@group(0) @binding(6) var<storage> CIE : array<array<f32,471>,3>;
+@group(0) @binding(7) var<storage> spectra : array<array<f32, 301>>;
 
 const PI: f32 = 3.14159265359;
 const MAXDEPTH : u32 = 1000000000;
@@ -14,15 +14,9 @@ const GRID_SIZE : u32 = 16;
 const BRDF : f32 = 1.0 / PI;
 const lambda_min : f32 = 400.0;
 const lambda_max : f32 = 700.0;
-const light_spectrum : vec4<f32> = vec4<f32>(0, 8.0, 15.6, 18.4) * 0.78;
-const light_reflectance : f32 = 0.78;
 
-struct CIE_CURVES {
-  CIE_X: array<f32, 471>,
-  CIE_Y: array<f32, 471>,
-  CIE_Z: array<f32, 471>
-}
-
+const DIFFUSE : u32 = 0;
+const LIGHT : u32 = 1;
 
     
 struct Sphere {
@@ -46,8 +40,9 @@ struct PlanarPatch {
   origin: vec3<f32>,
   edge1: vec3<f32>,
   edge2: vec3<f32>,
-  albedo: vec3<f32>,
-  emission: vec3<f32>,
+  emission_index: u32,
+  reflectance_index: u32,
+  material: u32,
   index: u32
 };
 
@@ -74,8 +69,10 @@ struct ShapeIntersection {
   hit: bool,
   index: u32,
   albedo: vec3<f32>,
-  emission: vec3<f32>,
+  emission_index: u32,
   last_index: u32,
+  reflectance_index: u32,
+  material: u32
 };
 
 fn camera_basis() -> mat3x3<f32> {
@@ -110,6 +107,20 @@ fn camera_film_parameters(screen_pos : vec2<u32>, screen_size : vec2<u32>) -> ve
   return vec2<f32>(s,t);
 }
 
+fn sample_spectrum(spectrum : array<f32, 301>,  lambdas : vec4<u32>) -> vec4<f32>
+{
+  return vec4<f32>(spectrum[lambdas.x], spectrum[lambdas.y], spectrum[lambdas.z], spectrum[lambdas.w]);
+}
+
+fn sample_wavelengths() -> vec4<u32>
+{
+  let u = rand();
+  let range : u32 = u32(lambda_max - lambda_min);
+  let lambda : u32 = u32(mix(0, lambda_max - lambda_min, u));
+
+  return vec4<u32>(lambda, (lambda + 4) % range, (lambda + 8) % range, (lambda + 12) % range);
+}
+
 fn path_trace(input_ray : Ray) -> vec3<f32>
 {
   var ray : Ray = input_ray;
@@ -119,12 +130,8 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
   var pdf_b : f32 = 1.0;
   var exclude : u32 = 100;
   var prev_intersection : ShapeIntersection;
-  let sampled_spec : array<vec4<f32>, 2> = sample_light_spectrum();
-  let lambdas = vec4<u32>(u32(sampled_spec[1].x), u32(sampled_spec[1].y), u32(sampled_spec[1].z), u32(sampled_spec[1].w));
-  let spec = sampled_spec[0];
-  let white_spec = sample_piecewise_linear_white(lambdas);
-  let red_spec = sample_piecewise_linear_red(lambdas);
-  let green_spec = sample_piecewise_linear_green(lambdas);
+  let lambdas = sample_wavelengths();
+  let spec = sample_spectrum(spectra[3], lambdas);
 
   while(true)
   {
@@ -136,10 +143,10 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     exclude = shape_intersection.index;
 
 
-    var le = shape_intersection.emission;
-    if(length(le) > 0)
+    var material = shape_intersection.material;
+    if(material == LIGHT)
     {
-      var le2 = spec;
+      var le2 = sample_spectrum(spectra[shape_intersection.emission_index], lambdas);
       if(depth == 0)
       {
         radiance += beta * le2;
@@ -163,22 +170,9 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
       break;
     }
 
-    if(shape_intersection.albedo.x < 0.748 && shape_intersection.albedo.x > 0.746)
-    {
-      beta *= white_spec;
-    }
+    
 
-    if(shape_intersection.albedo.x == 1)
-    {
-      beta *= red_spec;
-    }
-
-    if(shape_intersection.albedo.x == 2)
-    {
-      beta *= green_spec;
-    }
-
-    //beta *= shape_intersection.albedo;
+    beta *= sample_spectrum(spectra[shape_intersection.reflectance_index], lambdas);
 
     let light = planar_patches[2];
     var normal = normalize(cross((light.edge1), (light.edge2)));
@@ -282,28 +276,29 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
 fn white_balance(xyz : vec3<f32> , source_spec : vec4<f32>, lambdas : vec4<u32>) -> vec3<f32>
 {
-  let M_bradford : mat3x3<f32> = mat3x3<f32>(0.8951,  0.2664, -0.1614,
-        -0.7502,  1.7135,  0.0367,
-         0.0389, -0.0685,  1.0296);
+  // let M_bradford : mat3x3<f32> = mat3x3<f32>(0.8951,  0.2664, -0.1614,
+  //       -0.7502,  1.7135,  0.0367,
+  //        0.0389, -0.0685,  1.0296);
 
-  let M_bradford_inv : mat3x3<f32> = mat3x3<f32>(0.9869929, -0.1470543,  0.1599627,
-        0.4323053,  0.5183603,  0.0492912,
-       -0.0085287,  0.0400428,  0.9684867);
+  // let M_bradford_inv : mat3x3<f32> = mat3x3<f32>(0.9869929, -0.1470543,  0.1599627,
+  //       0.4323053,  0.5183603,  0.0492912,
+  //      -0.0085287,  0.0400428,  0.9684867);
 
-  let source_illuminant_xyz = spectral_to_xyz_m();
-  //let source_illuminant_xyz = vec3<f32>(0.7, 1.1, 0.5);
-  let target_illuminant_xyz = vec3<f32>(0.95047, 1.0, 1.08883);
+  // let source_illuminant_xyz = spectral_to_xyz_m();
+  // //let source_illuminant_xyz = vec3<f32>(0.7, 1.1, 0.5);
+  // let target_illuminant_xyz = vec3<f32>(0.95047, 1.0, 1.08883);
   
-  let source_cone = M_bradford * source_illuminant_xyz;
-  let target_cone = M_bradford * target_illuminant_xyz;
+  // let source_cone = M_bradford * source_illuminant_xyz;
+  // let target_cone = M_bradford * target_illuminant_xyz;
 
-  var diag : mat3x3<f32> = mat3x3<f32>(target_cone.x / source_cone.x, 0.0, 0.0,
-                                        0.0, target_cone.y / source_cone.y, 0.0,
-                                        0.0, 0.0, target_cone.z / source_cone.z);
+  // var diag : mat3x3<f32> = mat3x3<f32>(target_cone.x / source_cone.x, 0.0, 0.0,
+  //                                       0.0, target_cone.y / source_cone.y, 0.0,
+  //                                       0.0, 0.0, target_cone.z / source_cone.z);
 
-  let color_cone = M_bradford_inv * diag * M_bradford * xyz;
+  // let color_cone = M_bradford_inv * diag * M_bradford * xyz;
 
-  return color_cone;
+  // return color_cone;
+  return vec3<f32>(1.0);
 }
 
 fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>, exclude : u32) -> f32
@@ -411,7 +406,7 @@ fn ray_sphere_intersection(sphere : Sphere, ray : Ray, t_min : f32, t_max : f32,
   shape_intersection.hit = true;
   shape_intersection.index = sphere.index;
   shape_intersection.albedo = sphere.albedo;
-  shape_intersection.emission = sphere.emission;
+  //shape_intersection.emission = sphere.emission;
   return shape_intersection;
 }
 
@@ -464,8 +459,9 @@ fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f3
   shape_intersection.normal = normalize(normal);
   shape_intersection.t = t;
   shape_intersection.index = planar_patch.index;
-  shape_intersection.albedo = planar_patch.albedo;
-  shape_intersection.emission = planar_patch.emission;
+  shape_intersection.emission_index = planar_patch.emission_index;
+  shape_intersection.reflectance_index = planar_patch.reflectance_index;
+  shape_intersection.material = planar_patch.material;
   return shape_intersection;
 }
 
@@ -590,51 +586,22 @@ fn rand() -> f32
 
 fn sample_CIE_X(lambdas : vec4<u32>) -> vec4<f32>
 {
-  let CIE_X = CIE.CIE_X;
+  let CIE_X = CIE[0];
   return vec4<f32>(CIE_X[lambdas.x + 40], CIE_X[lambdas.y + 40], CIE_X[lambdas.z + 40], CIE_X[lambdas.w + 40]);
 }
 
 fn sample_CIE_Y(lambdas : vec4<u32>) -> vec4<f32>
 {
-  let CIE_Y = CIE.CIE_Y;
+  let CIE_Y = CIE[1];
   return vec4<f32>(CIE_Y[lambdas.x + 40], CIE_Y[lambdas.y + 40], CIE_Y[lambdas.z + 40], CIE_Y[lambdas.w + 40]);
 }
 
 fn sample_CIE_Z(lambdas : vec4<u32>) -> vec4<f32>
 {
-  let CIE_Z = CIE.CIE_Z;
+  let CIE_Z = CIE[2];
   return vec4<f32>(CIE_Z[lambdas.x + 40], CIE_Z[lambdas.y + 40], CIE_Z[lambdas.z + 40], CIE_Z[lambdas.w + 40]);
 }
 
-fn spectral_to_xyz_m() -> vec3<f32>
-{
-
-
-    var xyz = vec3<f32>(0.0, 0.0, 0.0);
-    let integ = 106.856895;
-
-
-    for(var i : u32 = 0; i < 1000; i++)
-    {
-        let sampled_spec : array<vec4<f32>, 2> = sample_light_spectrum();
-        let lambdas = vec4<u32>(u32(sampled_spec[1].x), u32(sampled_spec[1].y), u32(sampled_spec[1].z), u32(sampled_spec[1].w));
-        let spec = sampled_spec[0];
-        let X_BAR = sample_CIE_X(lambdas);
-        let Y_BAR = sample_CIE_Y(lambdas);
-        let Z_BAR = sample_CIE_Z(lambdas);
-
-
-        let radiance = spec * 300;
-
-        xyz.x += (dot(X_BAR, radiance) /4);
-        xyz.y += (dot(Y_BAR, radiance) /4);
-        xyz.z += (dot(Z_BAR, radiance) /4);
-    }
-    xyz = xyz / integ;
-    xyz = xyz / 1000.0;
-
-    return xyz;
-}
 
 fn spectral_to_xyz(radianc : vec4<f32>, lambdas : vec4<u32>) -> vec3<f32>
 {
@@ -699,188 +666,9 @@ fn xyz_to_rgb(rgb : vec3<f32>) -> vec3<f32>
 
 var<private> seed : vec4<u32> = vec4<u32>(0);
 
-const white_spectrum : array<f32, 76>  = array<f32, 76>(0.343, 0.445, 0.551, 0.624, 0.665, 0.687, 0.708, 0.723, 0.715, 0.710, 0.745, 0.758, 0.739, 0.767, 0.777, 0.765, 0.751, 0.745, 0.748, 0.729, 0.745, 0.757, 0.753, 0.750, 0.746, 0.747, 0.735, 0.732, 0.739, 0.734, 0.725, 0.721, 0.733, 0.725, 0.732, 0.743, 0.744, 0.748, 0.728, 0.716, 0.733, 0.726, 0.713, 0.740, 0.754, 0.764, 0.752, 0.736, 0.734, 0.741, 0.740, 0.732, 0.745, 0.755, 0.751, 0.744, 0.731, 0.733, 0.744, 0.731, 0.712, 0.708, 0.729, 0.730, 0.727, 0.707, 0.703, 0.729, 0.750, 0.760, 0.751, 0.739, 0.724, 0.730, 0.740, 0.737);
-const green_spectrum : array<f32, 76> = array<f32, 76> (0.092, 0.096, 0.098, 0.097, 0.098, 0.095, 0.095, 0.097, 0.095, 0.094, 0.097, 0.098, 0.096, 0.101, 0.103, 0.104, 0.107, 0.109, 0.112, 0.115, 0.125, 0.140, 0.160, 0.187, 0.229, 0.285, 0.343, 0.390, 0.435, 0.464, 0.472, 0.476, 0.481, 0.462, 0.447, 0.441, 0.426, 0.406, 0.373, 0.347, 0.337, 0.314, 0.285, 0.277, 0.266, 0.250, 0.230, 0.207, 0.186, 0.171, 0.160, 0.148, 0.141, 0.136, 0.130, 0.126, 0.123, 0.121, 0.122, 0.119, 0.114, 0.115, 0.117, 0.117, 0.118, 0.120, 0.122, 0.128, 0.132, 0.139, 0.144, 0.146, 0.150, 0.152, 0.157, 0.159);
-const red_spectrum : array<f32, 76> = array<f32, 76>   (0.040, 0.046, 0.048, 0.053, 0.049, 0.050, 0.053, 0.055, 0.057, 0.056, 0.059, 0.057, 0.061, 0.061, 0.060, 0.062, 0.062, 0.062, 0.061, 0.062, 0.060, 0.059, 0.057, 0.058, 0.058, 0.058, 0.056, 0.055, 0.056, 0.059, 0.057, 0.055, 0.059, 0.059, 0.058, 0.059, 0.061, 0.061, 0.063, 0.063, 0.067, 0.068, 0.072, 0.080, 0.090, 0.099, 0.124, 0.154, 0.192, 0.255, 0.287, 0.349, 0.402, 0.443, 0.487, 0.513, 0.558, 0.584, 0.620, 0.606, 0.609, 0.651, 0.612, 0.610, 0.650, 0.638, 0.627, 0.620, 0.630, 0.628, 0.642, 0.639, 0.657, 0.639, 0.635, 0.642);
 
 
 
-fn sample_light_spectrum() -> array<vec4<f32>,2>
-{
-  let u = rand();
-  let lambda : f32 = mix(lambda_min, lambda_max, u); // from 400 to 700
-  var i :  u32 = u32((lambda - lambda_min)); // from 0 to 299
-  var lambdas : vec4<f32> = vec4<f32>(0);
-  lambdas[0] = f32(i);
-  let val : f32 = sample_piecewise_linear_light(i);
-  i = (i + 4) % 300;
-  lambdas[1] = f32(i);
-  let val2 : f32 = sample_piecewise_linear_light(i);
-  i = (i + 4) % 300;
-  lambdas[2] = f32(i);
-  let val3 : f32 = sample_piecewise_linear_light(i);
-  i = (i + 4) % 300;
-  lambdas[3] = f32(i);
-  let val4 : f32 = sample_piecewise_linear_light(i);
-  return array<vec4<f32>,2>(vec4<f32>(val, val2, val3, val4), lambdas);
-}
-
-fn sample_piecewise_linear_white(lambdas: vec4<u32>) -> vec4<f32>
-{
-  var val1 : f32 = 0.0;
-  //lambdas[x] is from 0 to 299
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[0] < i * 4u)
-    {
-      val1 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[0] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-  var val2: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[1] < i * 4u)
-    {
-      val2 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[1] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-  var val3: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[2] < i * 4u)
-    {
-      val3 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[2] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-  var val4: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[3] < i * 4u)
-    {
-      val4 = mix(white_spectrum[i - 1u], white_spectrum[i], f32(lambdas[3] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-  return vec4<f32>(val1, val2, val3, val4);
-}
-
-fn sample_piecewise_linear_red(lambdas : vec4<u32>) -> vec4<f32>
-{
-  var val1 : f32 = 0.0;
-  //lambdas[x] is from 0 to 299
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[0] < i * 4u)
-    {
-      val1 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[0] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-  var val2: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[1] < i * 4u)
-    {
-      val2 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[1] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-  var val3: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[2] < i * 4u)
-    {
-      val3 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[2] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-  var val4: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[3] < i * 4u)
-    {
-      val4 = mix(red_spectrum[i - 1u], red_spectrum[i], f32(lambdas[3] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-  return vec4<f32>(val1, val2, val3, val4);
-}
-
-fn sample_piecewise_linear_green(lambdas : vec4<u32>) -> vec4<f32>
-{
-  var val1 : f32 = 0.0;
-
-
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[0] < i * 4u)
-    {
-      val1 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[0] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
 
 
 
-  var val2: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[1] < i * 4u)
-    {
-      val2 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[1] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-
-
-  var val3: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[2] < i * 4u)
-    {
-      val3 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[2] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-
-
-  var val4: f32 = 0.0;
-  for(var i : u32 = 0u; i < 76u; i = i + 1u)
-  {
-    if(lambdas[3] < i * 4u)
-    {
-      val4 = mix(green_spectrum[i - 1u], green_spectrum[i], f32(lambdas[3] - (i - 1u) * 4u) / 4.0);
-      break;
-    }
-  }
-
-
-
-  return vec4<f32>(val1, val2, val3, val4);
-}
-
-fn sample_piecewise_linear_light(lambda_index : u32) -> f32
-{
-  if(lambda_index < 100)
-  {
-    return mix(light_spectrum[0], light_spectrum[1], f32(lambda_index) / 100.0);
-  }
-  else if(lambda_index < 200)
-  {
-    return mix(light_spectrum[1], light_spectrum[2], f32(lambda_index - 100) / 100.0);
-  }
-  else
-  {
-    return mix(light_spectrum[2], light_spectrum[3], f32(lambda_index - 200) / 100.0);
-  }
-}
