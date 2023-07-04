@@ -1,5 +1,6 @@
 import TextureRenderShaderCode from "./shaders/TextureRenderShader.wgsl";
 import ComputeShaderCode from "./shaders/ComputeShader.wgsl";
+import UpdateVariablesShaderCode from "./shaders/UpdateVariables.wgsl";
 import { vec3, vec4 } from "gl-matrix";
 import cornell from "./scenes/cornell";
 
@@ -27,22 +28,19 @@ class Renderer {
     renderPipelineBindGroup,
     computePipeline,
     computePipelineBindGroup,
-    computePipelineBindGroup2,
+    updateVariablesPipeline,
+    updateVariablesPipelineBindGroup,
   }) {
-    const { device, context, integrator, scene, sample, sample2, rndBuffer } =
-      this;
+    const { device, context, integrator, scene, sample, rndBuffer } = this;
     const { queue } = device;
     let s = 1;
     new Uint32Array(sample.getMappedRange()).set([s]);
     sample.unmap();
-    new Uint32Array(sample2.getMappedRange()).set([s]);
-    sample2.unmap();
-    const bindGroups = [computePipelineBindGroup, computePipelineBindGroup2];
-    const samples = [sample, sample2];
+
+    const bindGroups = computePipelineBindGroup;
+    const samples = sample;
 
     const frame = () => {
-      s = s + 1;
-      queue.writeBuffer(samples[s % 2], 0, new Uint32Array([s]));
       const texture = context.getCurrentTexture();
       const textureView = texture.createView();
       const renderPassDescriptor = {
@@ -56,9 +54,14 @@ class Renderer {
         ],
       };
       const commandEncoder = device.createCommandEncoder();
-      const computePassEncoder = commandEncoder.beginComputePass();
+      let computePassEncoder = commandEncoder.beginComputePass();
+      computePassEncoder.setPipeline(updateVariablesPipeline);
+      computePassEncoder.setBindGroup(0, updateVariablesPipelineBindGroup);
+      computePassEncoder.dispatchWorkgroups(1);
+      computePassEncoder.end();
+      computePassEncoder = commandEncoder.beginComputePass();
       computePassEncoder.setPipeline(computePipeline);
-      computePassEncoder.setBindGroup(0, bindGroups[(s + 1) % 2]);
+      computePassEncoder.setBindGroup(0, bindGroups);
       computePassEncoder.dispatchWorkgroups(
         Math.ceil(700 / 8),
         Math.ceil(700 / 8),
@@ -74,7 +77,6 @@ class Renderer {
       const commands = commandEncoder.finish();
       queue.submit([commands]);
       requestAnimationFrame(frame);
-      if (s % 1000 === 0) console.log(s);
     };
 
     requestAnimationFrame(frame);
@@ -308,6 +310,47 @@ const Main = async () => {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
+  const lights = [];
+  scene.planarPatches.forEach((planarPatch) => {
+    if (planarPatch.type === "light") {
+      lights.push(planarPatch);
+    }
+  });
+
+  stride = 64;
+  const lightsBuffer = device.createBuffer({
+    size: lights.length * stride,
+    usage: GPUBufferUsage.STORAGE,
+    mappedAtCreation: true,
+  });
+
+  const lightsData = lightsBuffer.getMappedRange();
+
+  lights.forEach((light, index) => {
+    const originView = new Float32Array(lightsData, index * stride, 3);
+    const edge1View = new Float32Array(lightsData, index * stride + 16, 3);
+    const edge2View = new Float32Array(lightsData, index * stride + 32, 3);
+    const emissionView = new Uint32Array(lightsData, index * stride + 44, 1);
+    const spectrimIndexView = new Uint32Array(
+      lightsData,
+      index * stride + 48,
+      1
+    );
+    const typeView = new Uint32Array(lightsData, index * stride + 52, 1);
+    const indexView = new Uint32Array(lightsData, index * stride + 56, 1);
+
+    originView.set(light.origin);
+    edge1View.set(light.edge1);
+    edge2View.set(light.edge2);
+    emissionView.set([keyIndexPairs[light.emission]]);
+    indexView.set([light.index]);
+    spectrimIndexView.set([keyIndexPairs[light.reflectance]]);
+    typeView.set([typeIndexPairs[light.type]]);
+  });
+
+  const lightsBufferSize = lightsData.byteLength;
+  lightsBuffer.unmap();
+
   const altFramebufferData = new Float32Array(700 * 700 * 4);
   const altFramebuffer = device.createBuffer({
     size: altFramebufferData.byteLength,
@@ -316,13 +359,7 @@ const Main = async () => {
 
   const sample = device.createBuffer({
     size: 4,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    mappedAtCreation: true,
-  });
-
-  const sample2 = device.createBuffer({
-    size: 4,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    usage: GPUBufferUsage.STORAGE,
     mappedAtCreation: true,
   });
 
@@ -578,25 +615,42 @@ const Main = async () => {
     0.0, 0.0, 0.0, 0.0,
   ];
 
-  array = array.map((a) => {
-    const step_size = 300 / (a.length - 1);
-    return a
-      .map((e, i) => {
-        if (i == a.length - 1) return e;
-        const start = e;
-        const end = a[i + 1];
-        const res = [];
-        for (let j = 0; j < step_size; j++) {
-          res.push(lerp(start, end, j / step_size));
-        }
-        return res;
-      })
-      .flat();
-  });
+  const lambdaMin = 400;
+  const lambdaMax = 700;
+  const range = lambdaMax - lambdaMin + 1;
 
-  console.log(array);
+  let narray = [];
 
-  const spectra = new Float32Array([...array.flat()]);
+  const sampleSpectrum = (spectrum, lambda) => {
+    const index = spectrum.wavelength.findIndex((e) => e >= lambda);
+    const start_index = Math.max(index - 1, 0);
+    const end_index = Math.min(index, spectrum.wavelength.length - 1);
+    const start = spectrum.value[start_index];
+    const end = spectrum.value[end_index];
+    const start_lambda = spectrum.wavelength[start_index];
+    const end_lambda = spectrum.wavelength[end_index];
+    if (start_lambda === end_lambda) return start;
+
+    const val = lerp(
+      start,
+      end,
+      (lambda - start_lambda) / (end_lambda - start_lambda)
+    );
+    return val;
+  };
+
+  for (let j = 0; j < array.length; j++) {
+    for (let i = 0; i < range; i++) {
+      const lambda = lambdaMin + i;
+      const value = sampleSpectrum(array[j], lambda);
+      narray.push(value);
+    }
+  }
+
+  array = narray;
+  const spectra = new Float32Array([...array]);
+  console.log(spectra);
+  console.log(keyIndexPairs);
   const spectra_buffer = device.createBuffer({
     size: spectra.byteLength,
     usage: GPUBufferUsage.STORAGE,
@@ -653,7 +707,7 @@ const Main = async () => {
         binding: 3,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
-          type: "uniform",
+          type: "storage",
         },
       },
       {
@@ -679,6 +733,13 @@ const Main = async () => {
       },
       {
         binding: 7,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "read-only-storage",
+        },
+      },
+      {
+        binding: 8,
         visibility: GPUShaderStage.COMPUTE,
         buffer: {
           type: "read-only-storage",
@@ -743,63 +804,11 @@ const Main = async () => {
           size: spectra.byteLength,
         },
       },
-    ],
-  });
-
-  const computePipelineBindGroup2 = device.createBindGroup({
-    layout: computePipelineBindGroupLayout,
-    entries: [
       {
-        binding: 0,
-        resource: framebufferView,
-      },
-      {
-        binding: 1,
+        binding: 8,
         resource: {
-          buffer: spheresBuffer,
-          size: spheresBuffer.byteLength,
-        },
-      },
-      {
-        binding: 2,
-        resource: {
-          buffer: altFramebuffer,
-          size: altFramebufferData.byteLength,
-        },
-      },
-      {
-        binding: 3,
-        resource: {
-          buffer: sample2,
-          size: 4,
-        },
-      },
-      {
-        binding: 4,
-        resource: {
-          buffer: planarPatchesBuffer,
-          size: planarPatchesData.byteLength,
-        },
-      },
-      {
-        binding: 5,
-        resource: {
-          buffer: cameraBuffer,
-          size: camera.byteLength,
-        },
-      },
-      {
-        binding: 6,
-        resource: {
-          buffer: CIE_buffer,
-          size: CIE.byteLength,
-        },
-      },
-      {
-        binding: 7,
-        resource: {
-          buffer: spectra_buffer,
-          size: spectra.byteLength,
+          buffer: lightsBuffer,
+          size: lightsBufferSize,
         },
       },
     ],
@@ -819,6 +828,45 @@ const Main = async () => {
     },
   });
 
+  const updateVariablesPipelineBindGroupLayout = device.createBindGroupLayout({
+    entries: [
+      {
+        binding: 0,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "storage",
+        },
+      },
+    ],
+  });
+
+  const updateVariablesPipelineBindGroup = device.createBindGroup({
+    layout: updateVariablesPipelineBindGroupLayout,
+    entries: [
+      {
+        binding: 0,
+        resource: {
+          buffer: sample,
+          size: 4,
+        },
+      },
+    ],
+  });
+
+  const updateVariablesPipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [updateVariablesPipelineBindGroupLayout],
+  });
+
+  const updateVariablesPipeline = device.createComputePipeline({
+    layout: updateVariablesPipelineLayout,
+    compute: {
+      module: device.createShaderModule({
+        code: UpdateVariablesShaderCode,
+      }),
+      entryPoint: "main",
+    },
+  });
+
   device.queue.writeBuffer(spheresBuffer, 0, spheresData);
   device.queue.writeBuffer(planarPatchesBuffer, 0, planarPatchesData);
   device.queue.writeBuffer(cameraBuffer, 0, camera.buffer);
@@ -829,7 +877,6 @@ const Main = async () => {
     context,
     scene,
     sample,
-    sample2,
     rndBuffer,
   });
   renderer.render({
@@ -837,7 +884,8 @@ const Main = async () => {
     renderPipelineBindGroup,
     computePipeline,
     computePipelineBindGroup,
-    computePipelineBindGroup2,
+    updateVariablesPipeline,
+    updateVariablesPipelineBindGroup,
   });
 };
 

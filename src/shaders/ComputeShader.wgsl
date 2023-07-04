@@ -1,17 +1,17 @@
 @group(0) @binding(0) var framebuffer: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(1) var<storage> spheres : array<Sphere>;
 @group(0) @binding(2) var<storage, read_write> alt_color_buffer : array<vec3<f32>>;
-@group(0) @binding(3) var<uniform> sample : u32;
+@group(0) @binding(3) var<storage, read_write> sample : u32;
 @group(0) @binding(4) var<storage> planar_patches : array<PlanarPatch>;
 @group(0) @binding(5) var<storage> camera : Camera;
 @group(0) @binding(6) var<storage> CIE : array<array<f32,471>,3>;
 @group(0) @binding(7) var<storage> spectra : array<array<f32, 301>>;
+@group(0) @binding(8) var<storage> lights : array<PlanarPatch>;
 
 const PI: f32 = 3.14159265359;
 const MAXDEPTH : u32 = 1000000000;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
 const GRID_SIZE : u32 = 16;
-const BRDF : f32 = 1.0 / PI;
 const lambda_min : f32 = 400.0;
 const lambda_max : f32 = 700.0;
 
@@ -121,6 +121,14 @@ fn sample_wavelengths() -> vec4<u32>
   return vec4<u32>(lambda, (lambda + 4) % range, (lambda + 8) % range, (lambda + 12) % range);
 }
 
+fn sample_lights() -> PlanarPatch
+{
+  let u = rand();
+  let range : f32 = f32(arrayLength(&lights));
+  let index : u32 = u32(mix(0, range, u));
+  return lights[index];
+}
+
 fn path_trace(input_ray : Ray) -> vec3<f32>
 {
   var ray : Ray = input_ray;
@@ -131,7 +139,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
   var exclude : u32 = 100;
   var prev_intersection : ShapeIntersection;
   let lambdas = sample_wavelengths();
-  let spec = sample_spectrum(spectra[3], lambdas);
+  var BRDF = 1.0;
 
   while(true)
   {
@@ -174,7 +182,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
 
     beta *= sample_spectrum(spectra[shape_intersection.reflectance_index], lambdas);
 
-    let light = planar_patches[2];
+    let light = sample_lights();
     var normal = normalize(cross((light.edge1), (light.edge2)));
     let ndotd = dot(normal, ray.direction);
     if(ndotd > 0)
@@ -183,10 +191,12 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     }
     let light_normal = normal;
     let area = length(light.edge1) * length(light.edge2);
-    let point_on_light = sample_light();
+    let point_on_light = sample_light(light);
     let is_visible = is_visible(shape_intersection.position, point_on_light, exclude);
     let light_dir = normalize(point_on_light - shape_intersection.position);
     let cos_theta_i = max(0, dot(shape_intersection.normal, light_dir));
+
+    let spec = sample_spectrum(spectra[light.emission_index], lambdas);
 
     let radiance_light = spec * cos_theta_i;
 
@@ -200,6 +210,11 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
 
     pdf_b = cos_theta_i / PI;
     let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
+
+    if(shape_intersection.material == DIFFUSE)
+    {
+      BRDF = 1.0 / PI;
+    }
     
     radiance += BRDF * (is_visible * radiance_light) * weight_l * beta / pdf_l;
 
@@ -238,6 +253,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
 
+
     /* Intialize screen size and position. Return if outside bounds of framebuffer. */
     let screen_size: vec2<u32> = vec2<u32>(u32(camera.viewport_width), u32(camera.viewport_height));
     let screen_pos : vec2<u32> = vec2<u32>(u32(GlobalInvocationID.x), u32(GlobalInvocationID.y));
@@ -265,41 +281,10 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     xyzc = xyz_to_rgb(xyzc);
 
 
-   
-
-    //xyzc = xyzc / (xyzc + vec3<f32>(1.0));
-    //xyzc = pow(xyzc, vec3<f32>(1.0 / 2.2));
-
     textureStore(framebuffer, screen_pos, vec4<f32>(xyzc, 1.0));
     
 }
 
-fn white_balance(xyz : vec3<f32> , source_spec : vec4<f32>, lambdas : vec4<u32>) -> vec3<f32>
-{
-  // let M_bradford : mat3x3<f32> = mat3x3<f32>(0.8951,  0.2664, -0.1614,
-  //       -0.7502,  1.7135,  0.0367,
-  //        0.0389, -0.0685,  1.0296);
-
-  // let M_bradford_inv : mat3x3<f32> = mat3x3<f32>(0.9869929, -0.1470543,  0.1599627,
-  //       0.4323053,  0.5183603,  0.0492912,
-  //      -0.0085287,  0.0400428,  0.9684867);
-
-  // let source_illuminant_xyz = spectral_to_xyz_m();
-  // //let source_illuminant_xyz = vec3<f32>(0.7, 1.1, 0.5);
-  // let target_illuminant_xyz = vec3<f32>(0.95047, 1.0, 1.08883);
-  
-  // let source_cone = M_bradford * source_illuminant_xyz;
-  // let target_cone = M_bradford * target_illuminant_xyz;
-
-  // var diag : mat3x3<f32> = mat3x3<f32>(target_cone.x / source_cone.x, 0.0, 0.0,
-  //                                       0.0, target_cone.y / source_cone.y, 0.0,
-  //                                       0.0, 0.0, target_cone.z / source_cone.z);
-
-  // let color_cone = M_bradford_inv * diag * M_bradford * xyz;
-
-  // return color_cone;
-  return vec3<f32>(1.0);
-}
 
 fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>, exclude : u32) -> f32
 {
@@ -317,9 +302,8 @@ fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>, exclude : u32) -> f32
   return 0.0;
 }
 
-fn sample_light() -> vec3<f32>
+fn sample_light(light : PlanarPatch) -> vec3<f32>
 {
-  let light = planar_patches[2];
   let u = rand();
   let v = rand();
   let p = light.origin + u * light.edge1 + v * light.edge2;
