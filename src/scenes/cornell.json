@@ -37,7 +37,7 @@
         "type": "diffuse"
       },
       {
-        "origin": [213, 555, 227],
+        "origin": [213, 554.9, 227],
         "edge1": [130, 0, 0.0],
         "edge2": [0.0, 0, 105],
         "emission": "light",

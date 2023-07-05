@@ -107,8 +107,9 @@ fn camera_film_parameters(screen_pos : vec2<u32>, screen_size : vec2<u32>) -> ve
   return vec2<f32>(s,t);
 }
 
-fn sample_spectrum(spectrum : array<f32, 301>,  lambdas : vec4<u32>) -> vec4<f32>
+fn sample_spectrum(index : u32,  lambdas : vec4<u32>) -> vec4<f32>
 {
+  let spectrum : array<f32, 301> = spectra[index];
   return vec4<f32>(spectrum[lambdas.x], spectrum[lambdas.y], spectrum[lambdas.z], spectrum[lambdas.w]);
 }
 
@@ -187,7 +188,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     var material = shape_intersection.material;
     if(material == LIGHT)
     {
-      var le = sample_spectrum(spectra[shape_intersection.emission_index], wavelengths);
+      var le = sample_spectrum(shape_intersection.emission_index, wavelengths);
       if(depth == 0)
       {
         radiance += beta * le;
@@ -211,7 +212,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       break;
     }
 
-    beta *= sample_spectrum(spectra[shape_intersection.reflectance_index], wavelengths);
+    beta *= sample_spectrum(shape_intersection.reflectance_index, wavelengths);
 
     let light = sample_lights();
     var normal = normalize(cross((light.edge1), (light.edge2)));
@@ -227,7 +228,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     let light_dir = normalize(point_on_light - shape_intersection.position);
     let cos_theta_i = max(0, dot(shape_intersection.normal, light_dir));
 
-    let spec = sample_spectrum(spectra[light.emission_index], wavelengths);
+    let spec = sample_spectrum(light.emission_index, wavelengths);
 
     let radiance_light = spec * cos_theta_i;
 
