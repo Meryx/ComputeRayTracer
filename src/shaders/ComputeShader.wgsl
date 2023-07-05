@@ -9,8 +9,9 @@
 @group(0) @binding(8) var<storage> lights : array<PlanarPatch>;
 
 const PI: f32 = 3.14159265359;
-const MAXDEPTH : u32 = 1000000000;
 const INFINITY : f32 = 3.40282346638528859812e+38f;
+const MAX_U32_VALUE : u32 = 0xFFFFFFFF;
+const MAXDEPTH : u32 = MAX_U32_VALUE;
 const GRID_SIZE : u32 = 16;
 const lambda_min : f32 = 400.0;
 const lambda_max : f32 = 700.0;
@@ -51,29 +52,28 @@ struct Ray {
   direction: vec3<f32>
 };
 
-struct HitRecord {
-  p: vec3<f32>,
-  normal: vec3<f32>,
-  t: f32,
-  hit: bool,
-  index: u32,
-  albedo: vec3<f32>,
-  emission: vec3<f32>,
-  last_index: u32,
-};
-
 struct ShapeIntersection {
   position: vec3<f32>,
   normal: vec3<f32>,
-  t: f32,
-  hit: bool,
-  index: u32,
-  albedo: vec3<f32>,
   emission_index: u32,
-  last_index: u32,
   reflectance_index: u32,
   material: u32
 };
+
+struct IntersectionContext {
+  t_min: f32,
+  t_max: f32,
+  index: u32,
+  exclude: u32,
+  hit: bool,
+  ray_origin: vec3<f32>,
+  ray_direction: vec3<f32>
+}
+
+struct Intersection {
+  shape_intersection: ShapeIntersection,
+  context: IntersectionContext
+}
 
 fn camera_basis() -> mat3x3<f32> {
   let w : vec3<f32> = normalize(camera.eye - camera.lookat);
@@ -129,46 +129,79 @@ fn sample_lights() -> PlanarPatch
   return lights[index];
 }
 
-fn path_trace(input_ray : Ray) -> vec3<f32>
+fn compute_light_pdf(intersection : Intersection) -> f32
 {
+  let shape_intersection : ShapeIntersection = intersection.shape_intersection;
+  let intersection_context : IntersectionContext = intersection.context;
+
+  /* 
+    Area PDF is (1 / Area) 
+  */
+  let light : PlanarPatch = lights[shape_intersection.emission_index];
+  let light_area : f32 = length(cross(light.edge1, light.edge2));
+  let light_area_pdf : f32 = 1.0 / light_area;
+
+  /* 
+    Convert from area PDF to solid angle PDF 
+    (area_pdf * distance^2) / abs(cos(theta))
+  */
+  let abs_cos_theta : f32 = abs(dot(shape_intersection.normal, -intersection_context.ray_direction));
+  let distance : f32 = length(shape_intersection.position - intersection_context.ray_origin);
+  let distance_squared : f32 = distance * distance;
+  let geometric_term : f32 = abs_cos_theta / distance_squared;
+  let light_solid_angle_pdf : f32 = light_area_pdf / geometric_term;
+
+  /* 
+    PDF of uniformally selecting the light is 1 / number_of_lights 
+  */
+  let number_of_lights : f32 = f32(arrayLength(&lights));
+  let light_selection_pdf : f32 = 1.0 / number_of_lights;
+  
+  let light_pdf : f32 = light_selection_pdf * light_solid_angle_pdf;
+  return light_pdf;
+}
+
+fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
+{
+
   var ray : Ray = input_ray;
   var depth : u32 = 0;
   var radiance : vec4<f32> = vec4<f32>(0.0);
   var beta : vec4<f32> = vec4<f32>(1.0);
-  var pdf_b : f32 = 1.0;
-  var exclude : u32 = 100;
+  var last_bounce_pdf_b : f32 = 1.0;
+  var exclude : u32 = MAX_U32_VALUE;
   var prev_intersection : ShapeIntersection;
-  let lambdas = sample_wavelengths();
   var BRDF = 1.0;
 
   while(true)
   {
-    let shape_intersection : ShapeIntersection = intersect(ray, exclude);
-    if(!shape_intersection.hit)
+    let intersection : Intersection = intersect(ray, exclude);
+    let shape_intersection : ShapeIntersection = intersection.shape_intersection;
+    let intersection_context : IntersectionContext = intersection.context;
+    if(!intersection_context.hit)
     {
       break;
     }
-    exclude = shape_intersection.index;
-
+    exclude = intersection_context.index;
 
     var material = shape_intersection.material;
     if(material == LIGHT)
     {
-      var le2 = sample_spectrum(spectra[shape_intersection.emission_index], lambdas);
+      var le = sample_spectrum(spectra[shape_intersection.emission_index], wavelengths);
       if(depth == 0)
       {
-        radiance += beta * le2;
+        radiance += beta * le;
       } else {
-        let light = planar_patches[shape_intersection.index];
+        let light = planar_patches[intersection_context.index];
         let area = length(light.edge1) * length(light.edge2);
         let abs_cos_theta_l = abs(dot(shape_intersection.normal, -ray.direction));
         let distance = length(prev_intersection.position - shape_intersection.position);
         let distance_squared = pow(distance, 2);
         let pdf_l_area = 1.0 / area;
         let geometric_term = abs_cos_theta_l / distance_squared;
-        let pdf_l = pdf_l_area / geometric_term;
-        let weight_b = power_heuristic(1, pdf_b, 1, pdf_l);
-        radiance += weight_b * le2 * beta;
+        let pdf_l = (pdf_l_area / geometric_term) * (1.0 / f32(arrayLength(&lights)));
+        let weight_b = power_heuristic(1, last_bounce_pdf_b, 1, pdf_l);
+        radiance += weight_b * le * beta;
       }
       break;
     }
@@ -178,9 +211,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
       break;
     }
 
-    
-
-    beta *= sample_spectrum(spectra[shape_intersection.reflectance_index], lambdas);
+    beta *= sample_spectrum(spectra[shape_intersection.reflectance_index], wavelengths);
 
     let light = sample_lights();
     var normal = normalize(cross((light.edge1), (light.edge2)));
@@ -196,7 +227,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     let light_dir = normalize(point_on_light - shape_intersection.position);
     let cos_theta_i = max(0, dot(shape_intersection.normal, light_dir));
 
-    let spec = sample_spectrum(spectra[light.emission_index], lambdas);
+    let spec = sample_spectrum(spectra[light.emission_index], wavelengths);
 
     let radiance_light = spec * cos_theta_i;
 
@@ -208,7 +239,7 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     
     let pdf_l = pdf_l_area / geometric_term;
 
-    pdf_b = cos_theta_i / PI;
+    let pdf_b = cos_theta_i / PI;
     let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
 
     if(shape_intersection.material == DIFFUSE)
@@ -220,11 +251,11 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
 
     let new_direction_with_pdf = cosine_weighted_sample_hemisphere(shape_intersection.normal);
     let new_direction = new_direction_with_pdf.xyz;
-    pdf_b = new_direction_with_pdf.w;
+    last_bounce_pdf_b = new_direction_with_pdf.w;
 
     let cosnew = abs(dot(shape_intersection.normal, new_direction));
 
-    beta *= BRDF * cosnew / (pdf_b);
+    beta *= BRDF * cosnew / (last_bounce_pdf_b);
 
     let max_beta_component = max(beta.x, max(beta.y, beta.z));
     if(depth > 1 && max_beta_component < 1)
@@ -243,16 +274,12 @@ fn path_trace(input_ray : Ray) -> vec3<f32>
     ray.direction = new_direction;
     depth++;
   }
-  var r = spectral_to_xyz(radiance, lambdas);
-  //r =  white_balance(r, spec, lambdas);
-  return r;
+  return radiance;
 }
 
 @compute 
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
-
-
 
     /* Intialize screen size and position. Return if outside bounds of framebuffer. */
     let screen_size: vec2<u32> = vec2<u32>(u32(camera.viewport_width), u32(camera.viewport_height));
@@ -264,24 +291,26 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     /* Initialize random seed. Multiply x by 100 and y by 100 to ensure unique values between every pixel */
     seed = vec4<u32>(screen_pos.y, screen_pos.x * 100, sample, tea(screen_pos.x, screen_pos.y * 100));
 
+    /* Get initial ray from camera */
+    let ray : Ray = camera_ray(screen_pos, screen_size);
 
+    /* Sample 4 wavelengths from the 400 - 700 range */
+    let wavelengths = sample_wavelengths();
 
-    var ray : Ray = camera_ray(screen_pos, screen_size);
-    var c : vec3<f32> = path_trace(ray);
+    /* Get radiance from path tracing */
+    let radiance : vec4<f32> = path_trace(ray, wavelengths);
+
+    /* Convert to XYZ color space */
+    let xyz_color = spectral_to_xyz(radiance, wavelengths);
     
     let pixel_index = screen_pos.x + screen_pos.y * screen_size.x;
 
-    var xyzc = c;
+    alt_color_buffer[pixel_index] += xyz_color;
+    let accumulated_xyz_color = alt_color_buffer[pixel_index];
+    let averaged_xyz_color = accumulated_xyz_color / f32(sample);
+    let rgb_color = xyz_to_rgb(averaged_xyz_color);
 
-
-    alt_color_buffer[pixel_index] += xyzc;
-    xyzc = alt_color_buffer[pixel_index];
-    xyzc = xyzc / f32(sample);
-
-    xyzc = xyz_to_rgb(xyzc);
-
-
-    textureStore(framebuffer, screen_pos, vec4<f32>(xyzc, 1.0));
+    textureStore(framebuffer, screen_pos, vec4<f32>(rgb_color, 1.0));
     
 }
 
@@ -291,8 +320,10 @@ fn is_visible(p0 : vec3<f32>, p1 : vec3<f32>, exclude : u32) -> f32
   var ray : Ray;
   ray.origin = p0;
   ray.direction = normalize(p1 - p0);
-  let shape_intersection : ShapeIntersection = intersect(ray, exclude);
-  if(shape_intersection.hit)
+  let intersection : Intersection = intersect(ray, exclude);
+  let shape_intersection : ShapeIntersection = intersection.shape_intersection;
+  let intersection_context : IntersectionContext = intersection.context;
+  if(intersection_context.hit)
   {
     if(length(shape_intersection.position - p1) < 0.0001)
     {
@@ -317,33 +348,17 @@ fn power_heuristic(nf : f32, f_pdf : f32, ng : f32, g_pdf : f32) -> f32
   return (f * f) / (f * f + g * g);
 }
 
-fn intersect(ray : Ray, exclude : u32) -> ShapeIntersection
+fn intersect(ray : Ray, exclude : u32) -> Intersection
 {
   var shape_intersection : ShapeIntersection;
-  shape_intersection.hit = false;
+  var intersection_context : IntersectionContext = create_intersection_context(exclude);
 
-  var t_max : f32 = INFINITY;
   for(var i : u32; i < arrayLength(&planar_patches); i++)
   {
-    let temp_si = ray_patch_intersection_test(planar_patches[i], ray, 0.001, t_max, exclude);
-    if(temp_si.hit)
-    {
-      shape_intersection = temp_si;
-      t_max = temp_si.t;
-    }
-    
+    ray_patch_intersection(planar_patches[i], ray, &intersection_context, &shape_intersection); 
   }
-  for(var i : u32; i < arrayLength(&spheres); i++)
-  {
-    let temp_si = ray_sphere_intersection(spheres[i], ray, 0.001, t_max, exclude);
-    if(temp_si.hit)
-    {
-      shape_intersection = temp_si;
-      t_max = temp_si.t;
-    }
-    
-  }
-  return shape_intersection;
+
+  return Intersection(shape_intersection, intersection_context);
 }
 
 fn ray_at(ray : Ray, t : f32) -> vec3<f32>
@@ -351,68 +366,69 @@ fn ray_at(ray : Ray, t : f32) -> vec3<f32>
   return ray.origin + t * ray.direction;
 }
 
-fn ray_sphere_intersection(sphere : Sphere, ray : Ray, t_min : f32, t_max : f32, exclude : u32) -> ShapeIntersection
+// fn ray_sphere_intersection(sphere : Sphere, ray : Ray, t_min : f32, t_max : f32, exclude : u32) -> ShapeIntersection
+// {
+//   var shape_intersection : ShapeIntersection;
+//   shape_intersection.hit = false;
+
+//   if(exclude == sphere.index)
+//   {
+//     return shape_intersection;
+//   }
+
+//   let origin = ray.origin;
+//   let direction = ray.direction;
+//   let radius = sphere.radius;
+//   let center = sphere.center;
+//   let oc = origin - center;
+//   let a = dot(direction, direction);
+//   let b = 2.0 * dot(oc, direction);
+//   let c = dot(oc, oc) - radius * radius;
+//   let discriminant = b * b - 4.0 * a * c;
+
+//   if (discriminant < 0.0) {
+//     return shape_intersection;
+//   }
+
+//   var t : f32 = (-b - sqrt(discriminant)) / (2.0 * a);
+
+//   if (t < t_min || t > t_max) {
+//     t = (-b + sqrt(discriminant)) / (2.0 * a);
+//     if (t < t_min || t > t_max)
+//     {
+//       return shape_intersection;
+//     }
+//   }
+
+//   shape_intersection.position = ray_at(ray, t);
+//   shape_intersection.normal = normalize(shape_intersection.position - center);
+//   shape_intersection.t = t;
+//   shape_intersection.hit = true;
+//   shape_intersection.index = sphere.index;
+//   //shape_intersection.albedo = sphere.albedo;
+//   //shape_intersection.emission = sphere.emission;
+//   return shape_intersection;
+// }
+
+fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, 
+                          context: ptr<function, IntersectionContext>, 
+                          shape_intersection : ptr<function, ShapeIntersection>)
 {
-  var shape_intersection : ShapeIntersection;
-  shape_intersection.hit = false;
 
-  if(exclude == sphere.index)
-  {
-    return shape_intersection;
-  }
-
-  let origin = ray.origin;
-  let direction = ray.direction;
-  let radius = sphere.radius;
-  let center = sphere.center;
-  let oc = origin - center;
-  let a = dot(direction, direction);
-  let b = 2.0 * dot(oc, direction);
-  let c = dot(oc, oc) - radius * radius;
-  let discriminant = b * b - 4.0 * a * c;
-
-  if (discriminant < 0.0) {
-    return shape_intersection;
-  }
-
-  var t : f32 = (-b - sqrt(discriminant)) / (2.0 * a);
-  if (t < t_min || t > t_max) {
-    t = (-b + sqrt(discriminant)) / (2.0 * a);
-    if (t < t_min || t > t_max)
-    {
-      return shape_intersection;
-    }
-  }
-
-  shape_intersection.position = ray_at(ray, t);
-  shape_intersection.normal = normalize(shape_intersection.position - center);
-  shape_intersection.t = t;
-  shape_intersection.hit = true;
-  shape_intersection.index = sphere.index;
-  shape_intersection.albedo = sphere.albedo;
-  //shape_intersection.emission = sphere.emission;
-  return shape_intersection;
-}
-
-fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f32, t_max : f32, exclude : u32) -> ShapeIntersection
-{
-
-  var shape_intersection : ShapeIntersection;
-  shape_intersection.hit = false;
-
+  let exclude = (*context).exclude;
   if(exclude == planar_patch.index)
   {
-    return shape_intersection;
+    return;
   }
 
 
-  let origin = ray.origin;
-  let direction = ray.direction;
   let edge1 = planar_patch.edge1;
   let edge2 = planar_patch.edge2;
   var normal = normalize(cross((edge1), (edge2)));
-  let origin_to_origin = planar_patch.origin - origin;
+
+  let direction = ray.direction;
   var ndotd = dot(normal, direction);
+
   if(ndotd > 0)
   {
     normal = -normal;
@@ -420,13 +436,18 @@ fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f3
   ndotd = dot(normal, direction);
   if(abs(ndotd)  < 0.0001)
   {
-    return shape_intersection;
+    return;
   }
 
+  let origin = ray.origin;
+  let origin_to_origin = planar_patch.origin - origin;
+
   let t = dot(normal, origin_to_origin) / (ndotd);
+  let t_min = (*context).t_min;
+  let t_max = (*context).t_max;
   if(t < t_min || t > t_max)
   {
-    return shape_intersection;
+    return;
   }
   let intersection = ray_at(ray, t);
   let m = intersection - planar_patch.origin;
@@ -435,18 +456,20 @@ fn ray_patch_intersection_test(planar_patch : PlanarPatch, ray : Ray, t_min : f3
 
   if(u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
   {
-    return shape_intersection;
+    return;
   }
 
-  shape_intersection.hit = true;
-  shape_intersection.position = intersection;
-  shape_intersection.normal = normalize(normal);
-  shape_intersection.t = t;
-  shape_intersection.index = planar_patch.index;
-  shape_intersection.emission_index = planar_patch.emission_index;
-  shape_intersection.reflectance_index = planar_patch.reflectance_index;
-  shape_intersection.material = planar_patch.material;
-  return shape_intersection;
+  (*shape_intersection).position = intersection;
+  (*shape_intersection).normal = normal;
+  (*shape_intersection).emission_index = planar_patch.emission_index;
+  (*shape_intersection).reflectance_index = planar_patch.reflectance_index;
+  (*shape_intersection).material = planar_patch.material;
+
+  (*context).t_max = t;
+  (*context).index = planar_patch.index;
+  (*context).hit = true;
+  (*context).ray_origin = origin;
+  (*context).ray_direction = direction;
 }
 
 
@@ -649,6 +672,20 @@ fn xyz_to_rgb(rgb : vec3<f32>) -> vec3<f32>
 }
 
 var<private> seed : vec4<u32> = vec4<u32>(0);
+
+fn create_intersection_context(exclude : u32) -> IntersectionContext
+{
+  /* PARAMETERS:
+     t_min         : f32
+     t_max         : f32
+     index         : u32
+     exclude       : u32 
+     hit           : bool
+     ray_origin    : vec3<f32>
+     ray_direction : vec3<f32>
+  */
+  return IntersectionContext(0.0001, INFINITY, MAX_U32_VALUE, exclude, false, vec3<f32>(0), vec3<f32>(0));
+}
 
 
 

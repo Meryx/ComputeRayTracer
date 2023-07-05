@@ -33,7 +33,7 @@ class Renderer {
   }) {
     const { device, context, integrator, scene, sample, rndBuffer } = this;
     const { queue } = device;
-    let s = 1;
+    let s = 0;
     new Uint32Array(sample.getMappedRange()).set([s]);
     sample.unmap();
 
