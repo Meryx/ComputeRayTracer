@@ -132,23 +132,24 @@ fn sample_lights() -> PlanarPatch
 
 fn compute_light_pdf(intersection : Intersection) -> f32
 {
+
   let shape_intersection : ShapeIntersection = intersection.shape_intersection;
   let intersection_context : IntersectionContext = intersection.context;
-
+  
   /* 
     Area PDF is (1 / Area) 
   */
   let light : PlanarPatch = lights[shape_intersection.emission_index];
-  let light_area : f32 = length(cross(light.edge1, light.edge2));
+  let light_area : f32 = length(light.edge1) * length(light.edge2);
   let light_area_pdf : f32 = 1.0 / light_area;
 
   /* 
     Convert from area PDF to solid angle PDF 
     (area_pdf * distance^2) / abs(cos(theta))
   */
-  let abs_cos_theta : f32 = abs(dot(shape_intersection.normal, -intersection_context.ray_direction));
+  let abs_cos_theta : f32 = max(0.00001, abs(dot(shape_intersection.normal, -intersection_context.ray_direction)));
   let distance : f32 = length(shape_intersection.position - intersection_context.ray_origin);
-  let distance_squared : f32 = distance * distance;
+  let distance_squared : f32 = pow(distance, 2);
   let geometric_term : f32 = abs_cos_theta / distance_squared;
   let light_solid_angle_pdf : f32 = light_area_pdf / geometric_term;
 
@@ -162,101 +163,111 @@ fn compute_light_pdf(intersection : Intersection) -> f32
   return light_pdf;
 }
 
+fn shadow_intersect(ray : Ray, include : u32, exclude : u32) -> Intersection
+{
+  var intersection : Intersection = intersect(ray, exclude);
+  if(intersection.context.index != include)
+  {
+    intersection.context.hit = false;
+  }
+  return intersection;
+}
+
+fn compute_patch_normal(planar_patch : PlanarPatch, direction : vec3<f32>) -> vec3<f32>
+{
+    var normal = normalize(cross((planar_patch.edge1), (planar_patch.edge2)));
+    let ndotd = dot(normal, direction);
+    if(ndotd > 0)
+    {
+      normal = -normal;
+    }
+    return normal;
+}
+
+fn compute_light_radiance(intersection : Intersection, wavelengths : vec4<u32>) -> vec4<f32>
+{
+  let shape_intersection : ShapeIntersection = intersection.shape_intersection;
+  let context : IntersectionContext = intersection.context;
+  let light = sample_lights();
+  let point_on_light = sample_light(light);
+  let light_dir = normalize(point_on_light - shape_intersection.position);
+  let shadow_intersection = shadow_intersect(Ray(shape_intersection.position, light_dir), light.index, context.index);
+
+  let cos_theta = max(0, dot(shape_intersection.normal, light_dir));
+  let spec = sample_spectrum(light.emission_index, wavelengths);
+
+  let le = spec * cos_theta;
+
+  let pdf_l = compute_light_pdf(shadow_intersection);
+
+  if(shadow_intersection.context.hit)
+  {
+    let pdf_b = cos_theta / PI;
+    let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
+    return le * weight_l / pdf_l;
+  }
+  return vec4<f32>(0.0);
+}
+
 fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
 {
 
   var ray : Ray = input_ray;
   var depth : u32 = 0;
-  var radiance : vec4<f32> = vec4<f32>(0.0);
+  var accumulated_radiance : vec4<f32> = vec4<f32>(0.0);
   var beta : vec4<f32> = vec4<f32>(1.0);
-  var last_bounce_pdf_b : f32 = 1.0;
+  var last_bounce_pdf : f32 = 1.0;
   var exclude : u32 = MAX_U32_VALUE;
-  var prev_intersection : ShapeIntersection;
-  var BRDF = 1.0;
+  var BRDF = vec4<f32>(1.0);
 
   while(true)
   {
     let intersection : Intersection = intersect(ray, exclude);
     let shape_intersection : ShapeIntersection = intersection.shape_intersection;
     let intersection_context : IntersectionContext = intersection.context;
+
     if(!intersection_context.hit)
     {
       break;
     }
+
     exclude = intersection_context.index;
 
     var material = shape_intersection.material;
     if(material == LIGHT)
     {
-      var le = sample_spectrum(shape_intersection.emission_index, wavelengths);
+      let le = sample_spectrum(shape_intersection.emission_index, wavelengths);
       if(depth == 0)
       {
-        radiance += beta * le;
-      } else {
-        let light = planar_patches[intersection_context.index];
-        let area = length(light.edge1) * length(light.edge2);
-        let abs_cos_theta_l = abs(dot(shape_intersection.normal, -ray.direction));
-        let distance = length(prev_intersection.position - shape_intersection.position);
-        let distance_squared = pow(distance, 2);
-        let pdf_l_area = 1.0 / area;
-        let geometric_term = abs_cos_theta_l / distance_squared;
-        let pdf_l = (pdf_l_area / geometric_term) * (1.0 / f32(arrayLength(&lights)));
-        let weight_b = power_heuristic(1, last_bounce_pdf_b, 1, pdf_l);
-        radiance += weight_b * le * beta;
+        accumulated_radiance += BRDF * beta * le;
+      } 
+      else 
+      {
+        let pdf_l = compute_light_pdf(intersection);
+        let weight_b = power_heuristic(1, last_bounce_pdf, 1, pdf_l);
+        accumulated_radiance += weight_b * le * beta;
       }
       break;
     }
+
 
     if(depth >= MAXDEPTH)
     {
       break;
     }
 
-    beta *= sample_spectrum(shape_intersection.reflectance_index, wavelengths);
-
-    let light = sample_lights();
-    var normal = normalize(cross((light.edge1), (light.edge2)));
-    let ndotd = dot(normal, ray.direction);
-    if(ndotd > 0)
-    {
-      normal = -normal;
-    }
-    let light_normal = normal;
-    let area = length(light.edge1) * length(light.edge2);
-    let point_on_light = sample_light(light);
-    let is_visible = is_visible(shape_intersection.position, point_on_light, exclude);
-    let light_dir = normalize(point_on_light - shape_intersection.position);
-    let cos_theta_i = max(0, dot(shape_intersection.normal, light_dir));
-
-    let spec = sample_spectrum(light.emission_index, wavelengths);
-
-    let radiance_light = spec * cos_theta_i;
-
-    let abs_cos_theta_l = max(0.000001, abs(dot(light_normal, -light_dir)));
-    let distance = length(point_on_light - shape_intersection.position);
-    let distance_squared = pow(distance, 2);
-    let pdf_l_area = 1.0 / area;
-    let geometric_term = abs_cos_theta_l / distance_squared;
-    
-    let pdf_l = pdf_l_area / geometric_term;
-
-    let pdf_b = cos_theta_i / PI;
-    let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
-
     if(shape_intersection.material == DIFFUSE)
     {
-      BRDF = 1.0 / PI;
+      BRDF = sample_spectrum(shape_intersection.reflectance_index, wavelengths) / PI;
     }
+
+    let le = compute_light_radiance(intersection, wavelengths);
+    accumulated_radiance += BRDF * le * beta;
     
-    radiance += BRDF * (is_visible * radiance_light) * weight_l * beta / pdf_l;
+    let new_direction = cosine_weighted_sample_hemisphere(shape_intersection.normal, &last_bounce_pdf);
+    let cos_theta = abs(dot(shape_intersection.normal, new_direction));
 
-    let new_direction_with_pdf = cosine_weighted_sample_hemisphere(shape_intersection.normal);
-    let new_direction = new_direction_with_pdf.xyz;
-    last_bounce_pdf_b = new_direction_with_pdf.w;
-
-    let cosnew = abs(dot(shape_intersection.normal, new_direction));
-
-    beta *= BRDF * cosnew / (last_bounce_pdf_b);
+    beta *= BRDF * cos_theta / last_bounce_pdf;
 
     let max_beta_component = max(beta.x, max(beta.y, beta.z));
     if(depth > 1 && max_beta_component < 1)
@@ -269,39 +280,31 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       beta /= 1 - q;
     }
 
-    prev_intersection = shape_intersection;
-
     ray.origin = shape_intersection.position;
     ray.direction = new_direction;
     depth++;
   }
-  return radiance;
+  return accumulated_radiance;
 }
 
 @compute 
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
-    /* Intialize screen size and position. Return if outside bounds of framebuffer. */
     let screen_size: vec2<u32> = vec2<u32>(u32(camera.viewport_width), u32(camera.viewport_height));
     let screen_pos : vec2<u32> = vec2<u32>(u32(GlobalInvocationID.x), u32(GlobalInvocationID.y));
     if(GlobalInvocationID.x >= screen_size.x || GlobalInvocationID.y >= screen_size.y) {
         return;
     }
 
-    /* Initialize random seed. Multiply x by 100 and y by 100 to ensure unique values between every pixel */
     seed = vec4<u32>(screen_pos.y, screen_pos.x * 100, sample, tea(screen_pos.x, screen_pos.y * 100));
 
-    /* Get initial ray from camera */
     let ray : Ray = camera_ray(screen_pos, screen_size);
 
-    /* Sample 4 wavelengths from the 400 - 700 range */
     let wavelengths = sample_wavelengths();
 
-    /* Get radiance from path tracing */
     let radiance : vec4<f32> = path_trace(ray, wavelengths);
 
-    /* Convert to XYZ color space */
     let xyz_color = spectral_to_xyz(radiance, wavelengths);
     
     let pixel_index = screen_pos.x + screen_pos.y * screen_size.x;
@@ -366,50 +369,6 @@ fn ray_at(ray : Ray, t : f32) -> vec3<f32>
 {
   return ray.origin + t * ray.direction;
 }
-
-// fn ray_sphere_intersection(sphere : Sphere, ray : Ray, t_min : f32, t_max : f32, exclude : u32) -> ShapeIntersection
-// {
-//   var shape_intersection : ShapeIntersection;
-//   shape_intersection.hit = false;
-
-//   if(exclude == sphere.index)
-//   {
-//     return shape_intersection;
-//   }
-
-//   let origin = ray.origin;
-//   let direction = ray.direction;
-//   let radius = sphere.radius;
-//   let center = sphere.center;
-//   let oc = origin - center;
-//   let a = dot(direction, direction);
-//   let b = 2.0 * dot(oc, direction);
-//   let c = dot(oc, oc) - radius * radius;
-//   let discriminant = b * b - 4.0 * a * c;
-
-//   if (discriminant < 0.0) {
-//     return shape_intersection;
-//   }
-
-//   var t : f32 = (-b - sqrt(discriminant)) / (2.0 * a);
-
-//   if (t < t_min || t > t_max) {
-//     t = (-b + sqrt(discriminant)) / (2.0 * a);
-//     if (t < t_min || t > t_max)
-//     {
-//       return shape_intersection;
-//     }
-//   }
-
-//   shape_intersection.position = ray_at(ray, t);
-//   shape_intersection.normal = normalize(shape_intersection.position - center);
-//   shape_intersection.t = t;
-//   shape_intersection.hit = true;
-//   shape_intersection.index = sphere.index;
-//   //shape_intersection.albedo = sphere.albedo;
-//   //shape_intersection.emission = sphere.emission;
-//   return shape_intersection;
-// }
 
 fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, 
                           context: ptr<function, IntersectionContext>, 
@@ -492,7 +451,7 @@ fn uniformally_sample_hemisphere(normal: vec3<f32>) -> vec3<f32> {
   return sample;
 }
 
-fn cosine_weighted_sample_hemisphere(normal : vec3<f32>) -> vec4<f32> {
+fn cosine_weighted_sample_hemisphere(normal : vec3<f32>, pdf : ptr<function, f32>) -> vec3<f32> {
   let u = rand();
   let v = rand();
   let r = sqrt(u);
@@ -513,7 +472,8 @@ fn cosine_weighted_sample_hemisphere(normal : vec3<f32>) -> vec4<f32> {
   let tangent = normalize(cross(up, normal));
   let bitangent = cross(normal, tangent);
   let direction = tangent * x + bitangent * y + normal * z;
-  return vec4<f32>(direction, z/PI);
+  (*pdf) = z / PI;
+  return vec3<f32>(direction);
 }
 
 
