@@ -4,8 +4,8 @@
     "lookat": [278, 273, 0],
     "up": [0, 1, 0],
     "focalLength": 0.7,
-    "width": 700,
-    "height": 700
+    "width": 1000,
+    "height": 1000
   },
   "lights": [
     {
@@ -77,9 +77,9 @@
         "type": "diffuse"
       },
       {
-        "origin": [240.0, 0.0, 272.0],
-        "edge1": [0, 164.0, 0],
-        "edge2": [49, 0, -152],
+        "origin": [286.0, 0.0, 119.0],
+        "edge1": [0, 165.0, 0],
+        "edge2": [-48, 0, 160],
         "emission": "dark",
         "reflectance": "white",
         "type": "diffuse"
@@ -87,7 +87,7 @@
       {
         "origin": [130.0, 0.0, 65.0],
         "edge1": [0, 165.0, 0],
-        "edge2": [160, 0, 54],
+        "edge2": [157, 0, 54],
         "emission": "dark",
         "reflectance": "white",
         "type": "diffuse"
@@ -151,10 +151,25 @@
     ],
     "spheres": [
       {
-        "center": [188.0, 240.0, 145.0],
+        "center": [188.0, 300.0, 300.0],
+        "radius": 60,
+        "emission": "dark",
+        "reflectance": "red",
+        "type": "diffuse"
+      },
+      {
+        "center": [188.0, 240.0, 140.0],
+        "radius": 75,
+        "emission": "dark",
+        "reflectance": "white",
+        "type": "glass"
+      },
+      {
+        "center": [188.0, 300.0, 300.0],
         "radius": 0,
-        "albedo": [1.0, 0.73, 0.73],
-        "emission": [0, 0, 0]
+        "emission": "dark",
+        "reflectance": "red",
+        "type": "diffuse"
       }
     ]
   },
@@ -221,7 +236,7 @@
     },
     "light": {
       "wavelength": [400, 500, 600, 700],
-      "value": [0, 8.0, 15.6, 18.4]
+      "value": [15, 18.0, 15.6, 18.4]
     },
 
     "dark": {
@@ -506,6 +521,10 @@
         34.8659, 34.5054, 34.021, 33.6581, 33.234, 32.7619, 32.3458, 31.9528,
         31.5312, 31.1662, 30.7224, 30.3099, 29.8833, 29.4863, 29.156
       ]
+    },
+    "extinction": {
+      "wavelength": [400, 500, 600, 700],
+      "value": [0.0, 0.0, 2, 20]
     }
   }
 }

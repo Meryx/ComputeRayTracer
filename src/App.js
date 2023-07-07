@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { Main } from "./main.js";
+import cornell from "./scenes/cornell.json";
 
 const App = () => {
   useEffect(() => {
@@ -7,7 +8,11 @@ const App = () => {
   }, []);
   return (
     <>
-      <canvas id="canvas" width={700} height={700} />
+      <canvas
+        id="canvas"
+        width={cornell.camera.width}
+        height={cornell.camera.height}
+      />
     </>
   );
 };

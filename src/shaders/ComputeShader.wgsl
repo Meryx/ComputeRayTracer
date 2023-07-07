@@ -5,17 +5,19 @@
 @group(0) @binding(4) var<storage> camera : Camera;
 @group(0) @binding(5) var<storage> CIE : array<array<f32,471>,3>;
 @group(0) @binding(6) var<storage> spectra : array<array<f32, 301>>;
-@group(0) @binding(7) var<storage> lights : array<PlanarPatch>;
+@group(0) @binding(7) var<storage> lights : array<Primitive>;
+@group(0) @binding(8) var<storage> primitives : array<Primitive>;
 
 const PI: f32 = 3.14159265359;
-const INFINITY : f32 = 3.40282346638528859812e+38f;
+const INFINITY : f32 = 0x7F800000;
 const MAX_U32_VALUE : u32 = 0xFFFFFFFF;
-const MAXDEPTH : u32 = MAX_U32_VALUE;
+const MAXDEPTH : u32 = 10;
 const GRID_SIZE : u32 = 16;
 const lambda_min : f32 = 400.0;
 const lambda_max : f32 = 700.0;
 const DIFFUSE : u32 = 0;
 const LIGHT : u32 = 1;
+const GLASS : u32 = 2;
 
 struct Camera {
   eye: vec3<f32>,
@@ -35,6 +37,14 @@ struct PlanarPatch {
   material: u32,
   index: u32
 };
+
+struct Primitive {
+  category: u32,
+  data1: vec3<f32>,
+  data2: vec3<f32>,
+  data3: vec3<f32>,
+  data4: vec4<u32>,
+}
 
 struct Ray {
   origin: vec3<f32>,
@@ -67,19 +77,31 @@ struct Intersection {
 @compute 
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
+  // if(sample > 3)
+  // {
+  //   return;
+  // }
 
     let screen_size: vec2<u32> = vec2<u32>(u32(camera.viewport_width), u32(camera.viewport_height));
     let screen_pos : vec2<u32> = vec2<u32>(u32(GlobalInvocationID.x), u32(GlobalInvocationID.y));
+    screen_pos_g = screen_pos;
     if(GlobalInvocationID.x >= screen_size.x || GlobalInvocationID.y >= screen_size.y) {
         return;
     }
 
+    // let s = primitives[arrayLength(&primitives) - 1];
+    // let val = f32(s.category);
+    // let c = vec3<f32>(val, val, val);
+    // textureStore(framebuffer, screen_pos, vec4<f32>(c/1000000000, 1.0));
+    // return;
+    
     seed = vec4<u32>(screen_pos.y, screen_pos.x * 100, sample, tea(screen_pos.x, screen_pos.y * 100));
 
     let ray : Ray = camera_ray(screen_pos, screen_size);
     let wavelengths = sample_wavelengths();
 
     let radiance : vec4<f32> = path_trace(ray, wavelengths);
+    // return;
     let xyz_color = spectral_to_xyz(radiance, wavelengths);
   
     let pixel_index = screen_pos.x + screen_pos.y * screen_size.x;
@@ -104,15 +126,21 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
   var last_bounce_pdf : f32 = 1.0;
   var exclude : u32 = MAX_U32_VALUE;
   var BRDF = vec4<f32>(1.0);
+  var specular_bounce : bool = false;
+  var prev_intersection : Intersection;
+  var etaScale = 1.0;
+  var inTransmission = false;
 
   while(true)
   {
-    let intersection : Intersection = intersect(ray, exclude);
+    let intersection : Intersection = intersect(ray, exclude, false);
     let shape_intersection : ShapeIntersection = intersection.shape_intersection;
     let intersection_context : IntersectionContext = intersection.context;
 
     if(!intersection_context.hit)
     {
+      //       let le = sample_spectrum(shape_intersection.emission_index, wavelengths);
+      // accumulated_radiance += beta * BRDF * le;
       break;
     }
 
@@ -121,10 +149,11 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     var material = shape_intersection.material;
     if(material == LIGHT)
     {
+
       let le = sample_spectrum(shape_intersection.emission_index, wavelengths);
-      if(depth == 0)
+      if(depth == 0 || specular_bounce)
       {
-        accumulated_radiance += BRDF * beta * le;
+        accumulated_radiance += beta * le;
       } 
       else 
       {
@@ -141,20 +170,119 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       break;
     }
 
+    if(inTransmission)
+    {
+      let distance = distance(intersection_context.ray_origin, shape_intersection.position);
+      let extinction = sample_spectrum(arrayLength(&spectra) - 1, wavelengths);
+      let attenuation = vec4<f32>(exp(-extinction.x * distance), exp(-extinction.y * distance), exp(-extinction.z * distance), exp(-extinction.w * distance));
+      beta *= attenuation;
+    }
+
     if(shape_intersection.material == DIFFUSE)
     {
       BRDF = sample_spectrum(shape_intersection.reflectance_index, wavelengths) / PI;
+
+      let le = compute_light_radiance(intersection, wavelengths);
+      accumulated_radiance += BRDF * le * beta;
+      
+      let new_direction = cosine_weighted_sample_hemisphere(shape_intersection.normal, &last_bounce_pdf);
+      let cos_theta = abs(dot(shape_intersection.normal, new_direction));
+
+      beta *= BRDF * cos_theta / last_bounce_pdf;
+      ray.origin = shape_intersection.position;
+      ray.direction = new_direction;
+      specular_bounce = false;
+              // textureStore(framebuffer, screen_pos_g, vec4<f32>(0.5,0,0, 1.0));
+        // return vec4<f32>(0.0);
+      prev_intersection = intersection;
+      // if(inTransmission)
+      // {
+      //   beta /= beta;
+      // }
     }
 
-    let le = compute_light_radiance(intersection, wavelengths);
-    accumulated_radiance += BRDF * le * beta;
-    
-    let new_direction = cosine_weighted_sample_hemisphere(shape_intersection.normal, &last_bounce_pdf);
-    let cos_theta = abs(dot(shape_intersection.normal, new_direction));
+    if(shape_intersection.material == GLASS)
+    {
+      let eta1 = 1.0;
+      let eta2 = 1.125;
+      var eta = eta1 / eta2;
+      let cos_theta = dot(shape_intersection.normal, ray.direction);
+      let reflected = fresnel_s(ray.direction, shape_intersection.normal, eta1, eta2);
+      let transmitted = 1 - reflected;
+      let pr = reflected;
+      let pt = 1 - reflected;
+      let u = rand();
+      var new_direction = vec3<f32>(0.0);
+      var current_direction = ray.direction;
+      var current_normal = shape_intersection.normal;
+      // current_normal = -current_normal;
 
-    beta *= BRDF * cos_theta / last_bounce_pdf;
+      if(cos_theta > 0)
+      {
+        eta = 1.0 / eta;
+        // cos_theta = -cos_theta;
+        current_normal = -current_normal;
+      }
+      if(u < pr / (pr + pt))
+      {
+        new_direction = (reflect(current_direction, current_normal));
+        // textureStore(framebuffer, screen_pos_g, vec4<f32>((current_normal + 1) / 2, 1.0));
+        // return vec4<f32>(0.0);
 
-    let max_beta_component = max(beta.x, max(beta.y, beta.z));
+        ray.origin = shape_intersection.position;
+        specular_bounce = true;
+              // exclude = MAX_U32_VALUE;
+
+      }
+      else
+      {
+              exclude = MAX_U32_VALUE;
+
+        new_direction = (refract(current_direction, current_normal, eta));
+
+        
+          new_direction = normalize(new_direction);
+          ray.origin = shape_intersection.position;
+          // specular_bounce = true;
+          beta /= (eta * eta);
+          etaScale *= (eta * eta);
+          last_bounce_pdf = pt / (pr + pt);
+          inTransmission = !inTransmission;
+
+
+        // textureStore(framebuffer, screen_pos_g, vec4<f32>(0,1,1, 1.0));
+        // return vec4<f32>(0.0);
+          // let medium_intersection : Intersection = intersect(Ray(shape_intersection.position, new_direction), MAX_U32_VALUE, false);
+          // let medium_shape_intersection : ShapeIntersection = medium_intersection.shape_intersection;
+          // let medium_intersection_context : IntersectionContext = medium_intersection.context;
+
+          
+          // if(medium_intersection_context.index == intersection_context.index)
+          // {
+          //   //attenuation from beer's law
+          //   let distance = distance(medium_shape_intersection.position, shape_intersection.position);
+          //   let extinction = sample_spectrum(arrayLength(&spectra) - 1, wavelengths);
+          //   let attenuation = vec4<f32>(exp(-extinction.x * distance), exp(-extinction.y * distance), exp(-extinction.z * distance), 1.0);
+          //   beta *= attenuation;
+          // }
+
+        
+      }
+
+
+
+
+
+        
+      
+      ray.direction = new_direction;
+      
+       
+    }
+
+
+    let rbeta = beta * etaScale;
+    let max_beta_component = max(rbeta.x, max(rbeta.y, rbeta.z));
     if(depth > 1 && max_beta_component < 1)
     {
       let q = max(0, 1 - max_beta_component);
@@ -165,8 +293,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       beta /= 1 - q;
     }
 
-    ray.origin = shape_intersection.position;
-    ray.direction = new_direction;
+
     depth++;
   }
   return accumulated_radiance;
@@ -219,7 +346,7 @@ fn sample_CIE_Z(lambdas : vec4<u32>) -> vec4<f32>
 }
 
 //======================== LIGHTS FUNCTIONS ========================
-fn sample_lights() -> PlanarPatch
+fn sample_lights() -> Primitive
 {
   let u = rand();
   let range : f32 = f32(arrayLength(&lights));
@@ -227,11 +354,11 @@ fn sample_lights() -> PlanarPatch
   return lights[index];
 }
 
-fn sample_light(light : PlanarPatch) -> vec3<f32>
+fn sample_light(light : Primitive) -> vec3<f32>
 {
   let u = rand();
   let v = rand();
-  let p = light.origin + u * light.edge1 + v * light.edge2;
+  let p = light.data1 + u * light.data2 + v * light.data3;
   return p;
 }
 
@@ -240,8 +367,8 @@ fn compute_light_pdf(intersection : Intersection) -> f32
   let shape_intersection : ShapeIntersection = intersection.shape_intersection;
   let intersection_context : IntersectionContext = intersection.context;
   
-  let light : PlanarPatch = lights[shape_intersection.emission_index];
-  let light_area : f32 = length(light.edge1) * length(light.edge2);
+  let light : Primitive = lights[shape_intersection.emission_index];
+  let light_area : f32 = length(light.data2) * length(light.data3);
   let light_area_pdf : f32 = 1.0 / light_area;
 
   let abs_cos_theta : f32 = max(0.00001, abs(dot(shape_intersection.normal, -intersection_context.ray_direction)));
@@ -264,10 +391,10 @@ fn compute_light_radiance(intersection : Intersection, wavelengths : vec4<u32>) 
   let light = sample_lights();
   let point_on_light = sample_light(light);
   let light_dir = normalize(point_on_light - shape_intersection.position);
-  let shadow_intersection = shadow_intersect(Ray(shape_intersection.position, light_dir), light.index, context.index);
+  let shadow_intersection = shadow_intersect(Ray(shape_intersection.position, light_dir), light.data4.w, context.index);
 
   let cos_theta = max(0, dot(shape_intersection.normal, light_dir));
-  let spec = sample_spectrum(light.emission_index, wavelengths);
+  let spec = sample_spectrum(light.data4.x, wavelengths);
 
   let le = spec * cos_theta;
 
@@ -277,7 +404,13 @@ fn compute_light_radiance(intersection : Intersection, wavelengths : vec4<u32>) 
   {
     let pdf_b = cos_theta / PI;
     let weight_l = power_heuristic(1, pdf_l, 1, pdf_b);
-    return le * weight_l / pdf_l;
+    
+    let t = le * weight_l / pdf_l;
+    // if(length(t) > 0.1)
+    // {
+    //   return vec4<f32>(0);
+    // }
+    return t;
   }
   return vec4<f32>(0.0);
 }
@@ -375,17 +508,135 @@ fn camera_film_parameters(screen_pos : vec2<u32>, screen_size : vec2<u32>) -> ve
 }
 
 //======================== INTERSECTION FUNCTIONS ========================
-fn intersect(ray : Ray, exclude : u32) -> Intersection
+fn intersect(ray : Ray, exclude : u32, shadow : bool) -> Intersection
 {
   var shape_intersection : ShapeIntersection;
   var intersection_context : IntersectionContext = create_intersection_context(exclude);
 
-  for(var i : u32; i < arrayLength(&planar_patches); i++)
+  for(var i : u32; i < arrayLength(&primitives) ; i++)
   {
-    ray_patch_intersection(planar_patches[i], ray, &intersection_context, &shape_intersection); 
+    if(shadow && primitives[i].data4.z == GLASS)
+    {
+      continue;
+    }
+    ray_intersection(primitives[i], ray, &intersection_context, &shape_intersection); 
   }
 
   return Intersection(shape_intersection, intersection_context);
+}
+
+fn ray_intersection(primitive : Primitive, ray : Ray, 
+                    context: ptr<function, IntersectionContext>, 
+                    shape_intersection : ptr<function, ShapeIntersection>)
+{
+  let category : u32 = primitive.category;
+  if(category == 0)
+  {
+    let exclude = (*context).exclude;
+    let index = primitive.data4.w;
+    if(exclude == index)
+    {
+      return;
+    }
+
+    let edge1 = primitive.data2;
+    let edge2 = primitive.data3;
+    var normal = normalize(cross((edge1), (edge2)));
+
+    let direction = ray.direction;
+    var ndotd = dot(normal, direction);
+
+    if(ndotd > 0)
+    {
+      normal = -normal;
+    }
+    ndotd = dot(normal, direction);
+    if(abs(ndotd)  < 0.0001)
+    {
+      return;
+    }
+
+    let origin = ray.origin;
+    let origin_to_origin = primitive.data1 - origin;
+
+    let t = dot(normal, origin_to_origin) / (ndotd);
+    let t_min = (*context).t_min;
+    let t_max = (*context).t_max;
+    if(t < t_min || t > t_max)
+    {
+      return;
+    }
+    let intersection = ray_at(ray, t);
+    let m = intersection - primitive.data1;
+    let u = dot(m, edge1) / dot(edge1, edge1);
+    let v = dot(m, edge2) / dot(edge2, edge2);
+
+    if(u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+    {
+      return;
+    }
+
+    (*shape_intersection).position = intersection;
+    (*shape_intersection).normal = normal;
+    (*shape_intersection).emission_index = primitive.data4.x;
+    (*shape_intersection).reflectance_index = primitive.data4.y;
+    (*shape_intersection).material = primitive.data4.z;
+
+    (*context).t_max = t;
+    (*context).index = index;
+    (*context).hit = true;
+    (*context).ray_origin = origin;
+    (*context).ray_direction = direction;
+    return;
+  }
+  if(category == 1)
+  {
+    let exclude = (*context).exclude;
+    let index = primitive.data4.w;
+    if(exclude == index)
+    {
+      return;
+    }
+    let center = primitive.data1;
+    let radius = primitive.data2.x;
+    let radius_squared = radius * radius;
+    let origin = ray.origin;
+    let direction = ray.direction;
+    let center_to_origin = origin - center;
+    let a = dot(direction, direction);
+    let b = 2.0 * dot(direction, center_to_origin);
+    let c = dot(center_to_origin, center_to_origin) - radius_squared;
+    let discriminant = b * b - 4.0 * a * c;
+    if(discriminant <= 0.0)
+    {
+      return;
+    }
+    var t = (-b - sqrt(discriminant)) / (2.0 * a);
+    let t_min = (*context).t_min;
+    let t_max = (*context).t_max;
+    if(t < t_min || t > t_max)
+    {
+      t = (-b + sqrt(discriminant)) / (2.0 * a);
+      if(t < t_min || t > t_max)
+      {
+        return;
+      }
+    }
+    let intersection = ray_at(ray, t);
+    let normal = normalize(intersection - center);
+    
+    (*shape_intersection).position = intersection;
+    (*shape_intersection).normal = normal;
+    (*shape_intersection).emission_index = primitive.data4.x;
+    (*shape_intersection).reflectance_index = primitive.data4.y;
+    (*shape_intersection).material = primitive.data4.z;
+
+    (*context).t_max = t;
+    (*context).index = primitive.data4.w;
+    (*context).hit = true;
+    (*context).ray_origin = origin;
+    (*context).ray_direction = direction;
+  }
 }
 
 fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray, 
@@ -394,7 +645,8 @@ fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray,
 {
 
   let exclude = (*context).exclude;
-  if(exclude == planar_patch.index)
+  let index = planar_patch.index;
+  if(exclude == index)
   {
     return;
   }
@@ -444,7 +696,7 @@ fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray,
   (*shape_intersection).material = planar_patch.material;
 
   (*context).t_max = t;
-  (*context).index = planar_patch.index;
+  (*context).index = index;
   (*context).hit = true;
   (*context).ray_origin = origin;
   (*context).ray_direction = direction;
@@ -452,13 +704,15 @@ fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray,
 
 fn shadow_intersect(ray : Ray, include : u32, exclude : u32) -> Intersection
 {
-  var intersection : Intersection = intersect(ray, exclude);
+  var intersection : Intersection = intersect(ray, exclude, true);
   if(intersection.context.index != include)
   {
     intersection.context.hit = false;
   }
   return intersection;
 }
+
+
 
 fn create_intersection_context(exclude : u32) -> IntersectionContext
 {
@@ -471,7 +725,7 @@ fn create_intersection_context(exclude : u32) -> IntersectionContext
      ray_origin    : vec3<f32>
      ray_direction : vec3<f32>
   */
-  return IntersectionContext(0.0001, INFINITY, MAX_U32_VALUE, exclude, false, vec3<f32>(0), vec3<f32>(0));
+  return IntersectionContext(0.001, INFINITY, MAX_U32_VALUE, exclude, false, vec3<f32>(0), vec3<f32>(0));
 }
 
 //======================== SHAPE FUNCTIONS ========================
@@ -564,6 +818,57 @@ fn sample_circle_cosine_weighted(radius : f32) -> vec2<f32>
   return vec2<f32>(r * x, r * y);
 }
 
+//======================== MATERIAL FUNCTIONS ========================
+fn fresnel_s(ray_dir: vec3<f32>, normal: vec3<f32>, eta1 : f32, eta2 : f32) -> f32 {
+    var cosi = clamp(dot(-ray_dir, normal), -1.0, 1.0);
+    var eta = eta1 / eta2;
+
+    if (cosi > 0.0) {
+        eta = eta2 / eta1;
+    }
+
+    let sint2 = eta * eta * (1.0 - cosi * cosi);
+    
+    if (sint2 > 1.0) {
+        return 1.0;  // Total internal reflection, return 1.0
+    }
+
+    var cost = sqrt(1.0 - sint2);
+
+    cosi = abs(cosi);
+    let Rs = ((eta1 * cosi) - (eta2 * cost)) / ((eta1 * cosi) + (eta2 * cost));
+    let Rp = ((eta2 * cosi) - (eta1 * cost)) / ((eta2 * cosi) + (eta1 * cost));
+
+    let reflectance = (Rs * Rs + Rp * Rp) / 2.0;
+
+    return reflectance;
+}
+fn fresnel(cos_theta_input : f32, etat_input : f32) -> f32
+{
+  var cos_theta = clamp(cos_theta_input, -1, 1);
+  var etat = etat_input;
+
+  if(cos_theta > 0)
+  {
+    cos_theta = -cos_theta;
+    etat = 1.0 / etat;
+  }
+
+  let sin2theta_i = 1.0 - cos_theta * cos_theta;
+  let sin2theta_t = sin2theta_i / (etat * etat);
+  if(sin2theta_t >= 1.0)
+  {
+    return 1.0;
+  }
+
+  let cos_theta_t = sqrt(1.0 - sin2theta_t);
+
+  let r_parallel = (etat * cos_theta - cos_theta_t) / (etat * cos_theta + cos_theta_t);
+  let r_perpendicular = (cos_theta - etat * cos_theta_t) / (cos_theta + etat * cos_theta_t);
+  return (r_parallel * r_parallel + r_perpendicular * r_perpendicular) / 2.0;
+
+}
+
 //======================== RANDOM UTILITIES FUNCTIONS ========================
 fn tea(val0:u32, val1:u32)->u32{
 // "GPU Random Numbers via the Tiny Encryption Algorithm"
@@ -600,3 +905,4 @@ fn rand() -> f32
 }
 
 var<private> seed : vec4<u32> = vec4<u32>(0);
+var<private> screen_pos_g : vec2<u32> = vec2<u32>(0);

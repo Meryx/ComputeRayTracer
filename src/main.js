@@ -22,10 +22,12 @@ const Main = async () => {
     format,
   });
 
+  const { width, height } = cornell.camera;
+
   const framebufferDescriptor = {
     size: {
-      width: 700,
-      height: 700,
+      width: width,
+      height: height,
     },
     format,
     usage:
@@ -114,6 +116,25 @@ const Main = async () => {
   scene.planarPatches = cornell.objects.patches.map((patch, i) => {
     return { ...patch, index: i };
   });
+  scene.primitives = [];
+  scene.primitives = scene.primitives.concat(
+    cornell.objects.patches.map((patch, i) => {
+      return {
+        ...patch,
+        index: i + scene.primitives.length,
+        category: "patch",
+      };
+    })
+  );
+  scene.primitives = scene.primitives.concat(
+    cornell.objects.spheres.map((sphere, i) => {
+      return {
+        ...sphere,
+        index: i + scene.primitives.length,
+        category: "sphere",
+      };
+    })
+  );
   let stride = 64;
   const planarPatchesBuffer = device.createBuffer({
     size: scene.planarPatches.length * stride,
@@ -122,6 +143,16 @@ const Main = async () => {
   });
 
   const planarPatchesData = planarPatchesBuffer.getMappedRange();
+
+  const primitivesBuffer = device.createBuffer({
+    size: scene.primitives.length * 80,
+    usage: GPUBufferUsage.STORAGE,
+    mappedAtCreation: true,
+  });
+
+  console.log(scene.primitives.length * 80);
+
+  const primitiveData = primitivesBuffer.getMappedRange();
 
   const obj = cornell.spectra;
   let array = [];
@@ -135,6 +166,7 @@ const Main = async () => {
   const typeIndexPairs = {
     diffuse: 0,
     light: 1,
+    glass: 2,
   };
 
   scene.planarPatches.forEach((planarPatch, index) => {
@@ -176,17 +208,58 @@ const Main = async () => {
     typeView.set([typeIndexPairs[planarPatch.type]]);
   });
 
-  const planarPatchesBufferSize = scene.planarPatches.length * stride;
-  planarPatchesBuffer.unmap();
+  stride = 80;
+  scene.primitives.forEach((primitive, index) => {
+    const categoryView = new Uint32Array(primitiveData, index * stride, 1);
+    const originView = new Float32Array(primitiveData, index * stride + 16, 3);
+    const edge1View = new Float32Array(primitiveData, index * stride + 32, 3);
+    const edge2View = new Float32Array(primitiveData, index * stride + 48, 3);
+    const emissionView = new Uint32Array(primitiveData, index * stride + 64, 1);
+    const spectrimIndexView = new Uint32Array(
+      primitiveData,
+      index * stride + 68,
+      1
+    );
+    const typeView = new Uint32Array(primitiveData, index * stride + 72, 1);
 
-  const lights = [];
-  scene.planarPatches.forEach((planarPatch) => {
-    if (planarPatch.type === "light") {
-      lights.push(planarPatch);
+    const indexView = new Uint32Array(primitiveData, index * stride + 76, 1);
+    if (primitive.category === "patch") {
+      categoryView.set([0]);
+      originView.set(primitive.origin);
+      edge1View.set(primitive.edge1);
+      edge2View.set(primitive.edge2);
+      emissionView.set([keyIndexPairs[primitive.emission]]);
+      indexView.set([primitive.index]);
+      spectrimIndexView.set([keyIndexPairs[primitive.reflectance]]);
+      typeView.set([typeIndexPairs[primitive.type]]);
+    }
+    if (primitive.category === "sphere") {
+      categoryView.set([1]);
+      originView.set(primitive.center);
+      edge1View.set([primitive.radius, primitive.radius, primitive.radius]);
+      //edge2View.set(primitive.edge2);
+      emissionView.set([keyIndexPairs[primitive.emission]]);
+      indexView.set([primitive.index]);
+      spectrimIndexView.set([keyIndexPairs[primitive.reflectance]]);
+      typeView.set([typeIndexPairs[primitive.type]]);
     }
   });
 
-  stride = 64;
+  const planarPatchesBufferSize = scene.planarPatches.length * 64;
+  planarPatchesBuffer.unmap();
+
+  const primitivesBufferSize = scene.primitives.length * 80;
+  console.log(primitivesBufferSize);
+  primitivesBuffer.unmap();
+
+  const lights = [];
+  scene.primitives.forEach((primitive) => {
+    if (primitive.type === "light") {
+      lights.push(primitive);
+    }
+  });
+
+  stride = 80;
   const lightsBuffer = device.createBuffer({
     size: lights.length * stride,
     usage: GPUBufferUsage.STORAGE,
@@ -195,32 +268,34 @@ const Main = async () => {
 
   const lightsData = lightsBuffer.getMappedRange();
 
-  lights.forEach((light, index) => {
-    const originView = new Float32Array(lightsData, index * stride, 3);
-    const edge1View = new Float32Array(lightsData, index * stride + 16, 3);
-    const edge2View = new Float32Array(lightsData, index * stride + 32, 3);
-    const emissionView = new Uint32Array(lightsData, index * stride + 44, 1);
+  lights.forEach((primitive, index) => {
+    const categoryView = new Float32Array(lightsData, index * stride, 1);
+    const originView = new Float32Array(lightsData, index * stride + 16, 3);
+    const edge1View = new Float32Array(lightsData, index * stride + 32, 3);
+    const edge2View = new Float32Array(lightsData, index * stride + 48, 3);
+    const emissionView = new Uint32Array(lightsData, index * stride + 64, 1);
     const spectrimIndexView = new Uint32Array(
       lightsData,
-      index * stride + 48,
+      index * stride + 68,
       1
     );
-    const typeView = new Uint32Array(lightsData, index * stride + 52, 1);
-    const indexView = new Uint32Array(lightsData, index * stride + 56, 1);
+    const typeView = new Uint32Array(lightsData, index * stride + 72, 1);
 
-    originView.set(light.origin);
-    edge1View.set(light.edge1);
-    edge2View.set(light.edge2);
-    emissionView.set([keyIndexPairs[light.emission]]);
-    indexView.set([light.index]);
-    spectrimIndexView.set([keyIndexPairs[light.reflectance]]);
-    typeView.set([typeIndexPairs[light.type]]);
+    const indexView = new Uint32Array(lightsData, index * stride + 76, 1);
+    categoryView.set([0]);
+    originView.set(primitive.origin);
+    edge1View.set(primitive.edge1);
+    edge2View.set(primitive.edge2);
+    emissionView.set([keyIndexPairs[primitive.emission]]);
+    indexView.set([primitive.index]);
+    spectrimIndexView.set([keyIndexPairs[primitive.reflectance]]);
+    typeView.set([typeIndexPairs[primitive.type]]);
   });
 
   const lightsBufferSize = lightsData.byteLength;
   lightsBuffer.unmap();
 
-  const altFramebufferData = new Float32Array(700 * 700 * 4);
+  const altFramebufferData = new Float32Array(width * height * 4);
   const altFramebuffer = device.createBuffer({
     size: altFramebufferData.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
@@ -377,6 +452,13 @@ const Main = async () => {
           type: "read-only-storage",
         },
       },
+      {
+        binding: 8,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "read-only-storage",
+        },
+      },
     ],
   });
 
@@ -434,6 +516,13 @@ const Main = async () => {
         resource: {
           buffer: lightsBuffer,
           size: lightsBufferSize,
+        },
+      },
+      {
+        binding: 8,
+        resource: {
+          buffer: primitivesBuffer,
+          size: primitivesBufferSize,
         },
       },
     ],
@@ -515,8 +604,8 @@ const Main = async () => {
     computePassEncoder.setPipeline(computePipeline);
     computePassEncoder.setBindGroup(0, computePipelineBindGroup);
     computePassEncoder.dispatchWorkgroups(
-      Math.ceil(700 / 8),
-      Math.ceil(700 / 8),
+      Math.ceil(width / 8),
+      Math.ceil(height / 8),
       1
     );
     computePassEncoder.end();
