@@ -165,10 +165,10 @@
         "type": "glass"
       },
       {
-        "center": [188.0, 300.0, 300.0],
+        "center": [120.0, 240.0, 220.0],
         "radius": 0,
         "emission": "dark",
-        "reflectance": "red",
+        "reflectance": "green",
         "type": "diffuse"
       }
     ]

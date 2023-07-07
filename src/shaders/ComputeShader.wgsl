@@ -175,7 +175,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       let distance = distance(intersection_context.ray_origin, shape_intersection.position);
       let extinction = sample_spectrum(arrayLength(&spectra) - 1, wavelengths);
       let attenuation = vec4<f32>(exp(-extinction.x * distance), exp(-extinction.y * distance), exp(-extinction.z * distance), exp(-extinction.w * distance));
-      beta *= attenuation;
+      // beta *= attenuation;
     }
 
     if(shape_intersection.material == DIFFUSE)
@@ -204,7 +204,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     if(shape_intersection.material == GLASS)
     {
       let eta1 = 1.0;
-      let eta2 = 1.125;
+      let eta2 = 1.7;
       var eta = eta1 / eta2;
       let cos_theta = dot(shape_intersection.normal, ray.direction);
       let reflected = fresnel_s(ray.direction, shape_intersection.normal, eta1, eta2);
@@ -223,7 +223,10 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
         // cos_theta = -cos_theta;
         current_normal = -current_normal;
       }
-      if(u < pr / (pr + pt))
+      new_direction = (reflect(current_direction, current_normal));
+              let test_direction = (refract(current_direction, current_normal, eta));
+
+      if(0.0 < pr && length(test_direction) <= 0.0)
       {
         new_direction = (reflect(current_direction, current_normal));
         // textureStore(framebuffer, screen_pos_g, vec4<f32>((current_normal + 1) / 2, 1.0));
