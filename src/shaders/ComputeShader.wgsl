@@ -11,7 +11,7 @@
 const PI: f32 = 3.14159265359;
 const INFINITY : f32 = 0x7F800000;
 const MAX_U32_VALUE : u32 = 0xFFFFFFFF;
-const MAXDEPTH : u32 = MAX_U32_VALUE;
+const MAXDEPTH : u32 = 100;
 const GRID_SIZE : u32 = 16;
 const lambda_min : f32 = 400.0;
 const lambda_max : f32 = 700.0;
@@ -96,7 +96,6 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     // return;
     
     seed = vec4<u32>(screen_pos.y, screen_pos.x * 100, sample, tea(screen_pos.x, screen_pos.y * 100));
-    var w = vec4<f32>(0.8, 0.8, 0.0, 1.0);
 
     let ray : Ray = camera_ray(screen_pos, screen_size);
     let wavelengths = sample_wavelengths();
@@ -168,7 +167,6 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     {
       break;
     }
-          // return accumulated_radiance;
 
 
     if(inTransmission)
@@ -178,6 +176,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       let attenuation = vec4<f32>(exp(-extinction.x * distance), exp(-extinction.y * distance), exp(-extinction.z * distance), exp(-extinction.w * distance));
       beta *= attenuation;
     }
+
 
     if(shape_intersection.material == DIFFUSE)
     {
@@ -202,6 +201,8 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       // }
       // return vec4<f32>(0.0);
     }
+                  // return accumulated_radiance;
+
 
     if(shape_intersection.material == GLASS)
     {
@@ -256,28 +257,9 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
           new_direction = normalize(new_direction);
           ray.origin = shape_intersection.position;
           // specular_bounce = true;
-          beta /= (eta * eta);
-          etaScale *= (eta * eta);
-          last_bounce_pdf = pt / (pr + pt);
+          beta *= (eta * eta);
+          etaScale /= (eta * eta);
           inTransmission = !inTransmission;
-
-
-        // textureStore(framebuffer, screen_pos_g, vec4<f32>(0,1,1, 1.0));
-        // return vec4<f32>(0.0);
-          // let medium_intersection : Intersection = intersect(Ray(shape_intersection.position, new_direction), MAX_U32_VALUE, false);
-          // let medium_shape_intersection : ShapeIntersection = medium_intersection.shape_intersection;
-          // let medium_intersection_context : IntersectionContext = medium_intersection.context;
-
-          
-          // if(medium_intersection_context.index == intersection_context.index)
-          // {
-          //   //attenuation from beer's law
-          //   let distance = distance(medium_shape_intersection.position, shape_intersection.position);
-          //   let extinction = sample_spectrum(arrayLength(&spectra) - 1, wavelengths);
-          //   let attenuation = vec4<f32>(exp(-extinction.x * distance), exp(-extinction.y * distance), exp(-extinction.z * distance), 1.0);
-          //   beta *= attenuation;
-          // }
-
         
       }
 
