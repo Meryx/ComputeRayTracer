@@ -137,6 +137,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     let intersection_context : IntersectionContext = intersection.context;
 
 
+    
     if(!intersection_context.hit)
     {
       break;

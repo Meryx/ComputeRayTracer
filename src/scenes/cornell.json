@@ -163,13 +163,6 @@
         "emission": "dark",
         "reflectance": "white",
         "type": "glass"
-      },
-      {
-        "center": [120.0, 240.0, 220.0],
-        "radius": 0,
-        "emission": "dark",
-        "reflectance": "green",
-        "type": "diffuse"
       }
     ]
   },
@@ -524,7 +517,7 @@
     },
     "extinction": {
       "wavelength": [400, 500, 600, 700],
-      "value": [0.0, 0.0, 2, 20]
+      "value": [0.0, 0.01, 0.1, 0.01]
     }
   }
 }
