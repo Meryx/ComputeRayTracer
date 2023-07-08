@@ -11,7 +11,7 @@
 const PI: f32 = 3.14159265359;
 const INFINITY : f32 = 0x7F800000;
 const MAX_U32_VALUE : u32 = 0xFFFFFFFF;
-const MAXDEPTH : u32 = 100;
+const MAXDEPTH : u32 = MAX_U32_VALUE;
 const GRID_SIZE : u32 = 16;
 const lambda_min : f32 = 400.0;
 const lambda_max : f32 = 700.0;
@@ -96,6 +96,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
     // return;
     
     seed = vec4<u32>(screen_pos.y, screen_pos.x * 100, sample, tea(screen_pos.x, screen_pos.y * 100));
+    var w = vec4<f32>(0.8, 0.8, 0.0, 1.0);
 
     let ray : Ray = camera_ray(screen_pos, screen_size);
     let wavelengths = sample_wavelengths();
@@ -118,7 +119,6 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
 
 fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
 {
-
   var ray : Ray = input_ray;
   var depth : u32 = 0;
   var accumulated_radiance : vec4<f32> = vec4<f32>(0.0);
@@ -137,10 +137,9 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     let shape_intersection : ShapeIntersection = intersection.shape_intersection;
     let intersection_context : IntersectionContext = intersection.context;
 
+
     if(!intersection_context.hit)
     {
-      //       let le = sample_spectrum(shape_intersection.emission_index, wavelengths);
-      // accumulated_radiance += beta * BRDF * le;
       break;
     }
 
@@ -169,6 +168,8 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
     {
       break;
     }
+          // return accumulated_radiance;
+
 
     if(inTransmission)
     {
@@ -325,35 +326,32 @@ fn ray_at(ray : Ray, t : f32) -> vec3<f32>
 //======================== SPECTRA FUNCTIONS ========================
 fn sample_spectrum(index : u32,  lambdas : vec4<u32>) -> vec4<f32>
 {
-  let spectrum : array<f32, 301> = spectra[index];
-  return vec4<f32>(spectrum[lambdas.x], spectrum[lambdas.y], spectrum[lambdas.z], spectrum[lambdas.w]);
+  return vec4<f32>(spectra[index][lambdas.x], spectra[index][lambdas.y], spectra[index][lambdas.z], spectra[index][lambdas.w]);
 }
 
 fn sample_wavelengths() -> vec4<u32>
 {
   let u = rand();
-  let range : u32 = u32(lambda_max - lambda_min);
-  let lambda : u32 = u32(mix(0, lambda_max - lambda_min, u));
+  let range : u32 = u32(lambda_max - lambda_min) + 1;
+  let lambda : u32 = u32(mix(0, lambda_max - lambda_min + 1, u));
 
   return vec4<u32>(lambda, (lambda + 4) % range, (lambda + 8) % range, (lambda + 12) % range);
 }
 
 fn sample_CIE_X(lambdas : vec4<u32>) -> vec4<f32>
 {
-  let CIE_X = CIE[0];
-  return vec4<f32>(CIE_X[lambdas.x + 40], CIE_X[lambdas.y + 40], CIE_X[lambdas.z + 40], CIE_X[lambdas.w + 40]);
+  return vec4<f32>(CIE[0][lambdas.x + 40], CIE[0][lambdas.y + 40], CIE[0][lambdas.z + 40], CIE[0][lambdas.w + 40]);
 }
 
 fn sample_CIE_Y(lambdas : vec4<u32>) -> vec4<f32>
 {
-  let CIE_Y = CIE[1];
-  return vec4<f32>(CIE_Y[lambdas.x + 40], CIE_Y[lambdas.y + 40], CIE_Y[lambdas.z + 40], CIE_Y[lambdas.w + 40]);
+  return vec4<f32>(CIE[1][lambdas.x + 40], CIE[1][lambdas.y + 40], CIE[1][lambdas.z + 40], CIE[1][lambdas.w + 40]);
 }
 
 fn sample_CIE_Z(lambdas : vec4<u32>) -> vec4<f32>
 {
-  let CIE_Z = CIE[2];
-  return vec4<f32>(CIE_Z[lambdas.x + 40], CIE_Z[lambdas.y + 40], CIE_Z[lambdas.z + 40], CIE_Z[lambdas.w + 40]);
+  
+  return vec4<f32>(CIE[2][lambdas.x + 40], CIE[2][lambdas.y + 40], CIE[2][lambdas.z + 40], CIE[2][lambdas.w + 40]);
 }
 
 //======================== LIGHTS FUNCTIONS ========================
