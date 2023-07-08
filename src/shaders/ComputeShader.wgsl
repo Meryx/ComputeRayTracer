@@ -11,7 +11,7 @@
 const PI: f32 = 3.14159265359;
 const INFINITY : f32 = 0x7F800000;
 const MAX_U32_VALUE : u32 = 0xFFFFFFFF;
-const MAXDEPTH : u32 = 10;
+const MAXDEPTH : u32 = 100;
 const GRID_SIZE : u32 = 16;
 const lambda_min : f32 = 400.0;
 const lambda_max : f32 = 700.0;
@@ -175,7 +175,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       let distance = distance(intersection_context.ray_origin, shape_intersection.position);
       let extinction = sample_spectrum(arrayLength(&spectra) - 1, wavelengths);
       let attenuation = vec4<f32>(exp(-extinction.x * distance), exp(-extinction.y * distance), exp(-extinction.z * distance), exp(-extinction.w * distance));
-      // beta *= attenuation;
+      beta *= attenuation;
     }
 
     if(shape_intersection.material == DIFFUSE)
@@ -199,23 +199,29 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       // {
       //   beta /= beta;
       // }
+      // return vec4<f32>(0.0);
     }
 
     if(shape_intersection.material == GLASS)
     {
       let eta1 = 1.0;
-      let eta2 = 1.7;
+      let eta2 = 1.5;
       var eta = eta1 / eta2;
       let cos_theta = dot(shape_intersection.normal, ray.direction);
       let reflected = fresnel_s(ray.direction, shape_intersection.normal, eta1, eta2);
       let transmitted = 1 - reflected;
-      let pr = reflected;
+      var pr = reflected;
       let pt = 1 - reflected;
       let u = rand();
       var new_direction = vec3<f32>(0.0);
       var current_direction = ray.direction;
       var current_normal = shape_intersection.normal;
       // current_normal = -current_normal;
+
+
+      // pr = fresnel(cos_theta, 1.125);
+      // textureStore(framebuffer, screen_pos_g, vec4<f32>(pr , pr, pr, 1.0));
+      // return vec4<f32>(0.0);
 
       if(cos_theta > 0)
       {
@@ -226,7 +232,7 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
       new_direction = (reflect(current_direction, current_normal));
               let test_direction = (refract(current_direction, current_normal, eta));
 
-      if(0.0 < pr && length(test_direction) <= 0.0)
+      if(u < pr / (pr + pt))
       {
         new_direction = (reflect(current_direction, current_normal));
         // textureStore(framebuffer, screen_pos_g, vec4<f32>((current_normal + 1) / 2, 1.0));
@@ -234,11 +240,13 @@ fn path_trace(input_ray : Ray, wavelengths : vec4<u32>) -> vec4<f32>
 
         ray.origin = shape_intersection.position;
         specular_bounce = true;
-              // exclude = MAX_U32_VALUE;
+              exclude = MAX_U32_VALUE;
 
       }
       else
       {
+                specular_bounce = true;
+
               exclude = MAX_U32_VALUE;
 
         new_direction = (refract(current_direction, current_normal, eta));
@@ -707,7 +715,7 @@ fn ray_patch_intersection(planar_patch : PlanarPatch, ray : Ray,
 
 fn shadow_intersect(ray : Ray, include : u32, exclude : u32) -> Intersection
 {
-  var intersection : Intersection = intersect(ray, exclude, true);
+  var intersection : Intersection = intersect(ray, exclude, false);
   if(intersection.context.index != include)
   {
     intersection.context.hit = false;
@@ -823,7 +831,7 @@ fn sample_circle_cosine_weighted(radius : f32) -> vec2<f32>
 
 //======================== MATERIAL FUNCTIONS ========================
 fn fresnel_s(ray_dir: vec3<f32>, normal: vec3<f32>, eta1 : f32, eta2 : f32) -> f32 {
-    var cosi = clamp(dot(-ray_dir, normal), -1.0, 1.0);
+    var cosi = clamp(dot(ray_dir, normal), -1.0, 1.0);
     var eta = eta1 / eta2;
 
     if (cosi > 0.0) {
@@ -851,7 +859,7 @@ fn fresnel(cos_theta_input : f32, etat_input : f32) -> f32
   var cos_theta = clamp(cos_theta_input, -1, 1);
   var etat = etat_input;
 
-  if(cos_theta > 0)
+  if(cos_theta < 0)
   {
     cos_theta = -cos_theta;
     etat = 1.0 / etat;
